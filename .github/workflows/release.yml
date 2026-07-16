@@ -1,0 +1,60 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify tag and package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version v$version"
+          }
+      - run: npm ci
+      - run: npm run audit:security
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run benchmark
+      - run: npm run package:win
+      - run: npm run verify:release
+      - name: Create or update GitHub Release
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $release = Resolve-Path apps/desktop/release
+          $installer = Join-Path $release "Pochamp-AI-$version-Setup.exe"
+          $blockmap = "$installer.blockmap"
+          $latest = Join-Path $release 'latest.yml'
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          gh release view $env:GITHUB_REF_NAME *> $null
+          $exists = $LASTEXITCODE -eq 0
+
+          if (-not $exists) {
+            gh release create $env:GITHUB_REF_NAME --title "포챔 AI $version" --generate-notes --draft
+          }
+
+          gh release upload $env:GITHUB_REF_NAME $installer $blockmap --clobber
+          gh release upload $env:GITHUB_REF_NAME $latest --clobber
+          if ($signature.Status -eq 'Valid') {
+            gh release edit $env:GITHUB_REF_NAME --draft=false --latest
+          } else {
+            Write-Warning '설치 파일이 서명되지 않아 Draft Release로 유지합니다.'
+          }

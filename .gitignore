@@ -1,0 +1,16 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.p12
+*.pfx
+*.pem
+*.key

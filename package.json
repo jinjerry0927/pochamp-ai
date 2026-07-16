@@ -1,0 +1,25 @@
+{
+  "name": "pochamp-ai",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Pokémon Champions 싱글 친선전용 로컬 의사결정 도우미",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "data:sync": "node scripts/sync-regulation.mjs",
+    "build:engine": "npm run build -w @pochamp/engine",
+    "dev": "npm run build:engine && npm run dev -w @pochamp/desktop",
+    "build": "npm run build:engine && npm run build -w @pochamp/desktop",
+    "benchmark": "npm run build:engine && node scripts/run-benchmark.mjs",
+    "package:win": "npm run build:engine && npm run package:win -w @pochamp/desktop",
+    "verify:release": "node scripts/verify-release.mjs",
+    "audit:security": "npm audit --audit-level=moderate",
+    "test": "npm run test -w @pochamp/engine && npm run build:engine && npm run test -w @pochamp/desktop",
+    "typecheck": "npm run build:engine && npm run typecheck -w @pochamp/desktop"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
