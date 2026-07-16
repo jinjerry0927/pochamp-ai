@@ -1,4 +1,5 @@
-import { getMove, getSpecies, neutralLevel50Stats, typeMultiplier } from './dex.js';
+import { getMove, getSpecies, localizeName, neutralLevel50Stats, typeMultiplier } from './dex.js';
+import { archetypeSelectionBonus, describeArchetype, detectTeamArchetypes } from './meta.js';
 import { battleStateSchema, teamSchema, type ActionEvaluation, type PreviewInput, type PreviewRecommendation, type Recommendation, type StatBlock, type TeamPokemon, type TurnInput } from './types.js';
 
 const STATE_VERSION = 'm-b@2026-07-16/heuristic-rollout-v1';
@@ -93,6 +94,8 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
   const started = performance.now();
   const team = teamSchema.parse(input.team);
   if (input.opponentSpecies.length < 3) throw new Error('상대 포켓몬을 최소 3마리 입력해야 합니다.');
+  const ownArchetypes = detectTeamArchetypes(team.pokemon.map((pokemon) => pokemon.species));
+  const opponentArchetypes = detectTeamArchetypes(input.opponentSpecies);
   const ownOptions = combinations(team.pokemon, 3).flatMap((members) => members.map((lead) => ({ members, lead })));
   const opponentOptions = combinations(input.opponentSpecies, 3).flatMap((members) => members.map((lead) => ({ members, lead })));
   const matchupCache = new Map<string, number>();
@@ -115,7 +118,7 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
       }, 0) / option.members.length;
       total += leadScore * 0.55 + rosterScore * 0.45;
     }
-    const score = total / opponentOptions.length;
+    const score = total / opponentOptions.length + archetypeSelectionBonus(option.members, ownArchetypes);
     const rate = sigmoid(score * 2.4);
     return { option, score, rate };
   }).sort((a, b) => b.score - a.score);
@@ -130,10 +133,19 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
     reasons: ['60개 출전·선봉 후보를 전수 비교', '상대의 가능한 출전 3마리와 선봉을 평균 평가'],
     risks: ['상대의 기술·도구가 공개되지 않아 합법 세트 평균을 가정'],
   }));
+  actions.forEach((action, index) => {
+    const option = ranked[index]?.option;
+    if (option) {
+      action.label = `${localizeName('species', option.lead.species)} 선봉 · ${option.members.map((member) => localizeName('species', member.species)).join(' / ')}`;
+      const selectedArchetypes = detectTeamArchetypes(option.members.map((member) => member.species));
+      action.reasons.unshift(...selectedArchetypes.map((archetype) => `${archetype.name} 코어를 함께 선출`));
+      action.risks.unshift(...opponentArchetypes.map((archetype) => `${archetype.name} 전개를 막지 못하면 상성 평가가 악화될 수 있음`));
+    }
+  });
   const best = ranked[0];
   if (!best || !actions[0]) throw new Error('팀 추천 후보를 만들지 못했습니다.');
 
-  return {
+  const recommendation: PreviewRecommendation = {
     phase: 'preview',
     primaryAction: actions[0],
     alternatives: actions.slice(1),
@@ -141,11 +153,17 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
     leadPokemonId: best.option.lead.id,
     roles: Object.fromEntries(best.option.members.map((member) => [member.id, roleFor(member)])),
     simulatedWinRate: actions[0].simulatedWinRate,
-    confidence: input.opponentSpecies.length === 6 ? 'medium' : 'low',
+    confidence: input.opponentSpecies.length === 6 || opponentArchetypes.some((archetype) => archetype.confidence === 'high') ? 'medium' : 'low',
     assumptions: ['상대 세부 세트가 없으므로 종·폼의 중립 Lv.50 스탯과 일반적인 자속 기술을 가정', 'Champions 고유 효과는 아직 검증 데이터가 있는 경우에만 반영'],
     latencyMs: Math.round((performance.now() - started) * 10) / 10,
     stateVersion: STATE_VERSION,
   };
+  recommendation.assumptions.unshift(
+    ...ownArchetypes.map((archetype) => describeArchetype('내 팀', archetype)),
+    ...opponentArchetypes.map((archetype) => describeArchetype('상대 팀', archetype)),
+    '메타 조합은 공개 랭크 데이터와 알려진 날씨·트릭룸 시너지를 사전분포로만 사용합니다.',
+  );
+  return recommendation;
 }
 
 function evaluateMove(
@@ -190,7 +208,7 @@ function evaluateMove(
   return {
     kind: 'move',
     id: move.id,
-    label: move.name,
+    label: localizeName('move', move.name),
     simulatedWinRate: Math.round(rate * 1000) / 10,
     score: rate,
     outcome: asOutcome(rate),
@@ -243,7 +261,9 @@ export function recommendTurn(input: TurnInput): Recommendation {
     .filter((pokemon): pokemon is TeamPokemon => Boolean(pokemon))
     .map((pokemon) => {
       const bench = state.ownBench.find((candidate) => candidate.teamPokemonId === pokemon.id || candidate.species === pokemon.species);
-      return evaluateSwitch(pokemon, state.opponentActive!.species, rolloutCount, bench ? clamp(bench.currentHp / bench.maxHp) : 1);
+      const evaluation = evaluateSwitch(pokemon, state.opponentActive!.species, rolloutCount, bench ? clamp(bench.currentHp / bench.maxHp) : 1);
+      evaluation.label = `${localizeName('species', pokemon.species)}로 교체`;
+      return evaluation;
     });
   const ranked = [...moveActions, ...switchActions].sort((a, b) => b.score - a.score);
   const primary = ranked[0];

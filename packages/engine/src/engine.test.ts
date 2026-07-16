@@ -1,9 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { getItemExists, getSpecies, getSpeciesBuilderOptions, recommendPreview, recommendTurn, regulationItems, regulationSpecies, statAlignmentOptions, validateTeam } from './index.js';
+import { calculateLevel50Stats, detectTeamArchetypes, getItemExists, getSpecies, getSpeciesBuilderOptions, localizeName, recommendPreview, recommendTurn, regulationItems, regulationSpecies, searchDex, statAlignmentOptions, validateTeam } from './index.js';
 import type { BattleState, Team } from './types.js';
 
+describe('team archetypes', () => {
+  it('Pelipper + Swampert 조합을 비 파티로 인식한다', () => {
+    const detected = detectTeamArchetypes(['Pelipper', 'Swampert', 'Garchomp', 'Gengar', 'Scizor', 'Milotic']);
+    expect(detected).toContainEqual(expect.objectContaining({ id: 'rain', confidence: 'high' }));
+    expect(detected.find((entry) => entry.id === 'rain')?.evidence).toEqual(expect.arrayContaining(['패리퍼', '대짱이']));
+  });
+
+  it('팀 미리보기 추천 근거에 감지한 비 파티를 표시한다', () => {
+    const rainTeam = structuredClone(team);
+    Object.assign(rainTeam.pokemon[0]!, {
+      id: 'pelipper', species: 'Pelipper', ability: 'Drizzle', heldItem: 'Damp Rock',
+      moves: ['Hurricane', 'Hydro Pump', 'U-turn', 'Roost'],
+    });
+    Object.assign(rainTeam.pokemon[1]!, {
+      id: 'swampert', species: 'Swampert', ability: 'Torrent', heldItem: 'Swampertite',
+      moves: ['Protect', 'Wave Crash', 'Earthquake', 'Ice Punch'],
+    });
+    const result = recommendPreview({
+      team: rainTeam,
+      opponentSpecies: ['Charizard', 'Blastoise', 'Venusaur', 'Gengar', 'Dragonite', 'Tyranitar'],
+    });
+    expect(result.assumptions.some((assumption) => assumption.includes('비 파티'))).toBe(true);
+  });
+});
+
 const pokemon = (id: string, species: string, ability: string, item: string, moves: [string, string, string, string], stats: Team['pokemon'][number]['stats']): Team['pokemon'][number] => ({
-  id, species, form: '', gender: 'N', ability, heldItem: item, moves, level: 50, stats, statAlignment: 'Serious', megaEligible: false,
+  id, species, form: '', gender: 'N', ability, heldItem: item, moves, level: 50, stats,
+  statPoints: { hp: 0, attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0 },
+  statAlignment: 'Serious', megaEligible: false,
 });
 
 const team: Team = {
@@ -36,6 +63,28 @@ describe('M-B 데이터', () => {
     expect(getItemExists('Barbaracleite')).toBe(true);
     expect(getItemExists('Choice Band')).toBe(false);
   });
+
+  it('한국어 이름과 한국어 검색을 제공한다', () => {
+    expect(localizeName('species', 'Swampert')).toBe('대짱이');
+    expect(localizeName('move', 'Wave Crash')).toBe('웨이브태클');
+    expect(localizeName('ability', 'Torrent')).toBe('급류');
+    expect(localizeName('item', 'Swampertite')).toBe('대짱이나이트');
+    expect(localizeName('nature', 'Adamant')).toBe('고집');
+    expect(searchDex('species', '대짱이')).toContain('Swampert');
+  });
+
+  it('대짱이의 Champions 기술과 사용률 순서를 반영한다', () => {
+    const options = getSpeciesBuilderOptions('Swampert');
+    expect(options.moves.slice(0, 4)).toEqual(['Protect', 'Wave Crash', 'Earthquake', 'Ice Punch']);
+    expect(options.abilities).toEqual(['Torrent', 'Damp']);
+    expect(options.usage.items[0]).toEqual({ name: 'Swampertite', usage: 98.5 });
+  });
+
+  it('66 능력 포인트와 Stat Alignment로 실제 Lv.50 스탯을 계산한다', () => {
+    expect(calculateLevel50Stats('Swampert', { hp: 2, attack: 32, defense: 0, specialAttack: 0, specialDefense: 0, speed: 32 }, 'Adamant')).toEqual({
+      hp: 177, attack: 178, defense: 110, specialAttack: 94, specialDefense: 110, speed: 112,
+    });
+  });
 });
 
 describe('팀 검증', () => {
@@ -58,6 +107,12 @@ describe('팀 검증', () => {
     const errors = validateTeam(duplicate).errors;
     expect(errors.some((message) => message.includes('같은 기술'))).toBe(true);
     expect(errors.some((message) => message.includes('Stat Alignment'))).toBe(true);
+  });
+
+  it('능력 포인트 66점과 개별 32점 제한을 검증한다', () => {
+    const invalid = structuredClone(team);
+    invalid.pokemon[0]!.statPoints = { hp: 3, attack: 32, defense: 0, specialAttack: 0, specialDefense: 0, speed: 32 };
+    expect(validateTeam(invalid).errors.some((message) => message.includes('66'))).toBe(true);
   });
 });
 

@@ -2,7 +2,7 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, nativeIma
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
-import { battleStateSchema, getSpeciesBuilderOptions, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
+import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
 import { z } from 'zod';
 import { AppStore } from './store.js';
 import { analyzeWithNim } from './nim.js';
@@ -128,6 +128,21 @@ function registerIpc(): void {
       allowedMegas: regulationMB.allowedMegas,
       items: regulationItems(),
       statAlignments: statAlignmentOptions,
+      localization: {
+        checkedAt: localizationKo.checkedAt,
+        source: localizationKo.source,
+        species: localizationKo.species,
+        moves: localizationKo.moves,
+        abilities: localizationKo.abilities,
+        items: localizationKo.items,
+        natures: localizationKo.natures,
+      },
+      meta: {
+        checkedAt: regulationMBMeta.checkedAt,
+        source: regulationMBMeta.source,
+        format: regulationMBMeta.format,
+        limitation: regulationMBMeta.limitation,
+      },
     },
   }));
 
@@ -156,8 +171,13 @@ function registerIpc(): void {
     const apiKey = await store.getApiKey();
     if (!apiKey) return { duplicate: false, screenshot: capture.dataUrl, latencyMs: Math.round(performance.now() - started), warning: 'API 키가 없어 수동 입력 모드로 전환했습니다.' };
     try {
-      const vision = await analyzeWithNim({ apiKey, model: settings.model, imageDataUrl: capture.dataUrl!, allowedSpecies: regulationSpecies().map((entry) => entry.name) });
-      return { duplicate: false, vision, latencyMs: Math.round(performance.now() - started) };
+      const vision = await analyzeWithNim({
+        apiKey,
+        model: settings.model,
+        imageDataUrl: capture.dataUrl!,
+        allowedSpecies: regulationSpecies().map((entry) => ({ name: entry.name, displayName: entry.displayName })),
+      });
+      return { duplicate: false, screenshot: capture.dataUrl, vision, latencyMs: Math.round(performance.now() - started) };
     } catch (error) {
       return { duplicate: false, screenshot: capture.dataUrl, latencyMs: Math.round(performance.now() - started), warning: `화면 인식 실패: ${error instanceof Error ? error.message : String(error)}. 수동 입력을 사용하세요.` };
     }
