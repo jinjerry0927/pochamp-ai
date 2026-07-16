@@ -26,7 +26,7 @@
 ## Blocked / Needs Human
 
 - 실제 한국어 BlueStacks 골든 프레임 정확도 평가는 사용자가 캡처를 축적한 뒤 진행한다.
-- NSIS 설치 파일은 같은 0.3.3 버전 산출물 재생성 단계에서 압축 프로세스가 조기 종료되어 새 설치본 배포를 보류한다. 소스 빌드와 `win-unpacked` 실행 검증은 통과했다.
+- 0.4.0 NSIS 설치 파일, blockmap, `latest.yml` 생성과 SHA-512 검증을 완료했다. 설치 파일은 아직 코드 서명되지 않았다.
 
 ## Verification
 
@@ -37,6 +37,7 @@
 - 메타: Pelipper+Swampert 입력 시 rain archetype 및 관련 가정이 추천에 포함되는 테스트.
 - 전체: `npm run typecheck`, `npm test`, `npm run benchmark`, `npm run build`, 설치본 UI 확인.
 - 결과: 엔진 14개 + 데스크톱 3개 테스트 통과, 벤치마크 p95 12.71ms, 보안 감사 취약점 0개, 새 `win-unpacked` UI 직접 확인.
+- 0.4.0 릴리스: `Pochamp-AI-0.4.0-Setup.exe` 106,119,258바이트, `latest.yml` SHA-512 일치.
 
 ## Decisions
 
