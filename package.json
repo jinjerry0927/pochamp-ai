@@ -1,8 +1,16 @@
 {
   "name": "pochamp-ai",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Pokémon Champions 싱글 친선전용 로컬 의사결정 도우미",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jinjerry0927/pochamp-ai.git"
+  },
+  "homepage": "https://github.com/jinjerry0927/pochamp-ai#readme",
+  "bugs": {
+    "url": "https://github.com/jinjerry0927/pochamp-ai/issues"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

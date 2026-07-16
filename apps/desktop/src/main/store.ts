@@ -9,7 +9,8 @@ interface StoredSettings extends Omit<PublicSettings, 'hasApiKey'> {
   encryptedApiKey?: string;
 }
 
-const SETTINGS_SCHEMA_VERSION = 3;
+const SETTINGS_SCHEMA_VERSION = 4;
+const DEFAULT_UPDATE_FEED_URL = 'https://github.com/jinjerry0927/pochamp-ai/releases/latest/download/';
 const defaults: StoredSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
   sourceId: '',
@@ -17,7 +18,7 @@ const defaults: StoredSettings = {
   model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
   consentAccepted: false,
   alwaysOnTop: false,
-  updateFeedUrl: '',
+  updateFeedUrl: DEFAULT_UPDATE_FEED_URL,
 };
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -44,6 +45,7 @@ export class AppStore {
     if (saved.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       settings.schemaVersion = SETTINGS_SCHEMA_VERSION;
       if (!saved.schemaVersion) settings.alwaysOnTop = false;
+      if (!saved.updateFeedUrl) settings.updateFeedUrl = DEFAULT_UPDATE_FEED_URL;
       await writeJson(this.settingsPath, settings);
     }
     return settings;
