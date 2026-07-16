@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BattlePokemonState, BattleState, PreviewRecommendation, Recommendation, Team, VisionResult } from '@pochamp/engine';
-import type { BootstrapData, HistoryEntry } from '../../shared/contracts';
+import type { BootstrapData, HistoryEntry, LocalVisionSlot, VisionReferenceStatus } from '../../shared/contracts';
 import { battlePokemonState } from './model';
 import { RecommendationCard } from './RecommendationCard';
 
@@ -35,6 +35,9 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [opponentMoves, setOpponentMoves] = useState('');
   const [monitoring, setMonitoring] = useState(false);
   const [vision, setVision] = useState<VisionResult | null>(null);
+  const [localVisionSlots, setLocalVisionSlots] = useState<LocalVisionSlot[]>([]);
+  const [referenceStatus, setReferenceStatus] = useState<VisionReferenceStatus | null>(null);
+  const [referenceBusy, setReferenceBusy] = useState(false);
   const [screenshot, setScreenshot] = useState('');
   const [confirmed, setConfirmed] = useState(true);
   const [status, setStatus] = useState('수동 입력 준비');
@@ -47,6 +50,10 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   useEffect(() => {
     if (team && !ownActiveId) setOwnActiveId(team.pokemon[0]?.id ?? '');
   }, [team, ownActiveId]);
+
+  useEffect(() => {
+    void window.pochamp.getVisionReferenceStatus().then(setReferenceStatus);
+  }, []);
 
   const speciesOptions = useMemo(
     () => [...regulation.species].sort((a, b) => a.displayName.localeCompare(b.displayName, 'ko')),
@@ -103,6 +110,8 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
       }
       setScreenshot(result.screenshot ?? '');
       setVision(result.vision ?? null);
+      const localSlots = result.localVisionSlots ?? [];
+      setLocalVisionSlots(localSlots);
       setConfirmed(false);
       if (result.vision) {
         const slots = emptyPreviewSlots();
@@ -135,6 +144,9 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
           && Boolean(result.vision.ownActiveSpecies || ownActiveId);
         setConfirmed(autoConfirmed);
         if (autoConfirmed) setStatus(`연속 분석 상태 자동 확인 · 신뢰도 ${Math.round(result.vision.confidence * 100)}%`);
+      }
+      if (!result.vision && localSlots.some((slot) => slot.candidates.length)) {
+        applyPreviewSlots(localSlots.map((slot) => slot.candidates[0]?.species ?? ''), true);
       }
       if (!result.vision || !monitoring || result.vision.confidence < 0.82) setStatus(result.warning ?? `인식 초안 완료 · ${result.latencyMs}ms`);
     } catch (error) {
@@ -231,6 +243,41 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     return () => window.clearInterval(timer);
   }, [capture, monitoring]);
 
+  const seedReferences = async () => {
+    setReferenceBusy(true);
+    setStatus('현재 규정 235개 폼의 Champions 선택 화면 참조 이미지를 내려받는 중…');
+    try {
+      const next = await window.pochamp.seedVisionReferences();
+      setReferenceStatus(next);
+      setStatus(`초기 참조팩 준비 완료 · ${next.seededSpecies}/${next.totalSpecies}종`);
+    } catch (error) {
+      setStatus(`참조팩 준비 실패: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setReferenceBusy(false);
+    }
+  };
+
+  const learnCurrentPreview = async () => {
+    if (!confirmed || localVisionSlots.length !== 6 || previewSlots.some((species) => !species)) {
+      setStatus('6개 슬롯의 정답을 모두 선택하고 인식 결과를 확인해 주세요.');
+      return;
+    }
+    setReferenceBusy(true);
+    try {
+      const next = await window.pochamp.learnVisionReferences(localVisionSlots.map((slot) => ({
+        slot: slot.slot,
+        species: previewSlots[slot.slot - 1] ?? '',
+        imageDataUrl: slot.imageDataUrl,
+      })));
+      setReferenceStatus(next);
+      setStatus(`Champions 정답 이미지 6개를 로컬 학습본으로 저장했습니다 · 학습된 포켓몬 ${next.learnedSpecies}종`);
+    } catch (error) {
+      setStatus(`이미지 학습 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setReferenceBusy(false);
+    }
+  };
+
   return (
     <section className="page-stack">
       <div className="section-heading">
@@ -240,9 +287,14 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
       <div className="status-line"><span className={busy ? 'pulse' : ''} />{status}</div>
       {monitoring && <div className="monitor-notice">화면이 바뀐 프레임만 NVIDIA로 전송합니다. 신뢰도 82% 이상인 턴은 상태를 자동 반영해 행동을 다시 추천하며, 게임 조작은 하지 않습니다.</div>}
       {!team && <div className="validation error">먼저 ‘내 팀’에서 정확한 6마리 팀을 저장하세요.</div>}
+      <div className="vision-reference-bar">
+        <div><b>로컬 이미지 참조팩</b><span>{referenceStatus ? `선택 화면 ${referenceStatus.seededSpecies}/${referenceStatus.totalSpecies}종 · Champions 학습 ${referenceStatus.learnedSpecies}종 · 총 ${referenceStatus.referenceCount}장${referenceStatus.seedCurrent ? ' · 최신' : ' · 업데이트 필요'}` : '상태 확인 중'}</span></div>
+        <button disabled={referenceBusy || (referenceStatus?.missingSpecies === 0 && referenceStatus.seedCurrent)} onClick={() => void seedReferences()}>{referenceBusy ? '처리 중…' : referenceStatus?.missingSpecies === 0 && referenceStatus.seedCurrent ? '참조팩 준비됨' : referenceStatus?.seededSpecies ? '참조팩 업데이트' : '235종 참조 이미지 받기'}</button>
+        <button className="primary" disabled={referenceBusy || !confirmed || localVisionSlots.length !== 6 || previewSlots.some((species) => !species)} onClick={() => void learnCurrentPreview()}>확정한 6마리 이미지 학습</button>
+      </div>
       <div className="battle-layout">
         <div className="battle-inputs">
-          {screenshot && <div className="capture-preview"><img src={screenshot} alt="BlueStacks 캡처" /><span>확인용 프레임은 메모리에만 유지됩니다.</span></div>}
+          {screenshot && <div className="capture-preview"><img src={screenshot} alt="BlueStacks 캡처" /><span>원본 프레임은 메모리에만 유지됩니다. ‘이미지 학습’을 누르면 상대 슬롯 6개만 사용자 데이터 폴더에 저장됩니다.</span></div>}
           {vision && (
             <div className="vision-summary">
               <b>NVIDIA 인식 신뢰도 {Math.round(vision.confidence * 100)}%</b>
@@ -255,9 +307,11 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
             <div className="preview-slot-grid">
               {previewSlots.map((value, index) => {
                 const recognized = vision?.opponentPreviewSlots.find((slot) => slot.slot === index + 1);
+                const local = localVisionSlots.find((slot) => slot.slot === index + 1);
                 return (
                   <label className="preview-slot" key={index}>
                     <span>슬롯 {index + 1}</span>
+                    {local && <img className="preview-slot-image" src={local.imageDataUrl} alt={`상대 슬롯 ${index + 1}`} />}
                     <select value={value} onChange={(event) => updatePreviewSlot(index, event.target.value)}>
                       <option value="">미확인</option>
                       {speciesOptions.map((entry) => <option key={entry.id} value={entry.name}>{entry.displayName}</option>)}
@@ -269,6 +323,7 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
                         {recognized.evidence ? ` · ${recognized.evidence}` : ''}
                       </small>
                     )}
+                    {local?.candidates.length ? <small className="local-candidates">로컬 Top 3 · {local.candidates.map((candidate) => `${speciesName(candidate.species)} ${Math.round(candidate.confidence * 100)}%${candidate.source === 'learned' ? '★' : ''}`).join(' · ')}</small> : null}
                   </label>
                 );
               })}

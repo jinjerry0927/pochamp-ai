@@ -47,7 +47,7 @@ export function SettingsPanel({ settings, onSettings }: Props) {
       </article>
       <article className="settings-card">
         <h3>2. NVIDIA NIM</h3>
-        <div className="notice">캡처 프레임은 NVIDIA 호스팅 API로 전송되며 디스크에는 저장하지 않습니다. API가 실패하면 수동 입력으로 전환합니다.</div>
+        <div className="notice">캡처 원본은 NVIDIA 호스팅 API로 전송되며 디스크에는 저장하지 않습니다. 배틀 도우미에서 ‘이미지 학습’을 직접 누른 경우에만 상대 아이콘 슬롯 6개를 로컬 참조 데이터로 저장합니다.</div>
         <label className="check consent"><input type="checkbox" checked={settings.consentAccepted} onChange={(event) => void update({ consentAccepted: event.target.checked })} />화면 전송 사실을 확인했고 개인 친선전에서만 사용합니다.</label>
         <label className="field"><span>모델 ID</span><input value={settings.model} onChange={(event) => void update({ model: event.target.value })} /></label>
         <div className="api-row"><label className="field"><span>NVIDIA API 키</span><input type="password" value={apiKey} placeholder={settings.hasApiKey ? '보안 저장소에 등록됨' : 'nvapi-…'} onChange={(event) => setApiKey(event.target.value)} /></label><button className="primary" onClick={async () => { try { onSettings(await window.pochamp.setApiKey(apiKey)); setApiKey(''); setMessage('API 키를 Windows 보안 저장소에 저장했습니다.'); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } }}>키 저장</button><button onClick={async () => onSettings(await window.pochamp.clearApiKey())}>삭제</button></div>

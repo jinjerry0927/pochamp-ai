@@ -28,10 +28,39 @@ export interface CaptureSource {
   thumbnail: string;
 }
 
+export interface LocalVisionCandidate {
+  species: string;
+  confidence: number;
+  types: string[];
+  source: 'seed' | 'learned';
+}
+
+export interface LocalVisionSlot {
+  slot: number;
+  imageDataUrl: string;
+  candidates: LocalVisionCandidate[];
+}
+
+export interface VisionReferenceStatus {
+  totalSpecies: number;
+  seededSpecies: number;
+  learnedSpecies: number;
+  referenceCount: number;
+  missingSpecies: number;
+  seedCurrent: boolean;
+}
+
+export interface VisionTrainingSample {
+  slot: number;
+  species: string;
+  imageDataUrl: string;
+}
+
 export interface CaptureAnalysis {
   duplicate: boolean;
   screenshot?: string;
   vision?: VisionResult;
+  localVisionSlots?: LocalVisionSlot[];
   warning?: string;
   latencyMs: number;
 }
@@ -107,6 +136,9 @@ export interface PochampApi {
   setApiKey(apiKey: string): Promise<PublicSettings>;
   clearApiKey(): Promise<PublicSettings>;
   analyzeCapture(): Promise<CaptureAnalysis>;
+  getVisionReferenceStatus(): Promise<VisionReferenceStatus>;
+  seedVisionReferences(): Promise<VisionReferenceStatus>;
+  learnVisionReferences(samples: VisionTrainingSample[]): Promise<VisionReferenceStatus>;
   saveTeam(team: Team): Promise<{ validation: ValidationResult; teams: Team[] }>;
   deleteTeam(teamId: string): Promise<Team[]>;
   validateTeam(team: Team): Promise<ValidationResult>;
