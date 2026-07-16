@@ -1,5 +1,11 @@
 # 변경 기록
 
+## 0.3.3 - 2026-07-16
+
+- sandbox renderer에서 지원되지 않는 ESM preload를 CommonJS preload로 전환해 빈 화면 문제를 수정했습니다.
+- preload 연결이 실패해도 빈 화면 대신 복구 안내를 표시합니다.
+- 릴리스 검증에 sandbox preload 형식 회귀 검사를 추가했습니다.
+
 ## 0.3.2 - 2026-07-16
 
 - 기본 업데이트 피드를 `jinjerry0927/pochamp-ai` GitHub Releases에 연결했습니다.
