@@ -20,4 +20,9 @@ const actualSize = (await stat(installerPath)).size;
 if (actualHash !== expectedHash) throw new Error('설치 파일의 SHA-512가 latest.yml과 다릅니다.');
 if (actualSize !== expectedSize) throw new Error('설치 파일 크기가 latest.yml과 다릅니다.');
 
-console.log(JSON.stringify({ version: metadataVersion, fileName, size: actualSize, sha512Matches: true }, null, 2));
+const preloadBundle = await readFile(resolve('apps/desktop/out/preload/index.cjs'), 'utf8');
+const mainBundle = await readFile(resolve('apps/desktop/out/main/index.js'), 'utf8');
+if (!preloadBundle.includes('require("electron")')) throw new Error('sandbox preload가 CommonJS Electron import를 사용하지 않습니다.');
+if (!mainBundle.includes('../preload/index.cjs')) throw new Error('main process가 CommonJS preload를 참조하지 않습니다.');
+
+console.log(JSON.stringify({ version: metadataVersion, fileName, size: actualSize, sha512Matches: true, sandboxPreload: 'commonjs' }, null, 2));

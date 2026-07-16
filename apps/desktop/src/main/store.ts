@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Team } from '@pochamp/engine';
+import { inferStatPoints, type StatPointBlock, type Team } from '@pochamp/engine';
 import type { HistoryEntry, PublicSettings } from '../shared/contracts.js';
 
 interface StoredSettings extends Omit<PublicSettings, 'hasApiKey'> {
@@ -9,7 +9,9 @@ interface StoredSettings extends Omit<PublicSettings, 'hasApiKey'> {
   encryptedApiKey?: string;
 }
 
-const SETTINGS_SCHEMA_VERSION = 3;
+const SETTINGS_SCHEMA_VERSION = 4;
+const DEFAULT_UPDATE_FEED_URL = 'https://github.com/jinjerry0927/pochamp-ai/releases/latest/download/';
+const emptyStatPoints: StatPointBlock = { hp: 0, attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0 };
 const defaults: StoredSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
   sourceId: '',
@@ -17,7 +19,7 @@ const defaults: StoredSettings = {
   model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
   consentAccepted: false,
   alwaysOnTop: false,
-  updateFeedUrl: '',
+  updateFeedUrl: DEFAULT_UPDATE_FEED_URL,
 };
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -44,6 +46,7 @@ export class AppStore {
     if (saved.schemaVersion !== SETTINGS_SCHEMA_VERSION) {
       settings.schemaVersion = SETTINGS_SCHEMA_VERSION;
       if (!saved.schemaVersion) settings.alwaysOnTop = false;
+      if (!saved.updateFeedUrl) settings.updateFeedUrl = DEFAULT_UPDATE_FEED_URL;
       await writeJson(this.settingsPath, settings);
     }
     return settings;
@@ -95,11 +98,17 @@ export class AppStore {
     const teams = await readJson<Team[]>(this.teamsPath, []);
     return teams.map((team) => ({
       ...team,
-      pokemon: team.pokemon.map((pokemon) => ({
-        ...pokemon,
-        statAlignment: pokemon.statAlignment === 'neutral' ? pokemon.nature || 'Serious' : pokemon.statAlignment,
-        nature: undefined,
-      })),
+      pokemon: team.pokemon.map((pokemon) => {
+        const statAlignment = pokemon.statAlignment === 'neutral' ? pokemon.nature || 'Serious' : pokemon.statAlignment;
+        const savedPoints = (pokemon as typeof pokemon & { statPoints?: StatPointBlock }).statPoints;
+        const inferred = savedPoints ? null : inferStatPoints(pokemon.species, pokemon.stats, statAlignment);
+        return {
+          ...pokemon,
+          statPoints: savedPoints ?? (inferred?.exact ? inferred.points : { ...emptyStatPoints }),
+          statAlignment,
+          nature: undefined,
+        };
+      }),
     }));
   }
 

@@ -1,7 +1,8 @@
 {
   "name": "@pochamp/desktop",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "private": true,
+  "author": "James Lee",
   "type": "module",
   "main": "out/main/index.js",
   "description": "포챔 AI Windows 로컬 도우미",
@@ -57,7 +58,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.invalid/pochamp-ai/"
+        "url": "https://github.com/jinjerry0927/pochamp-ai/releases/latest/download/"
       }
     ]
   }

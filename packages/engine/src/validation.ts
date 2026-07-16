@@ -1,4 +1,4 @@
-import { canLearnMove, getItemExists, getMove, getSpecies, isAbilityAvailable, regulationSpecies, statAlignmentOptions, toID } from './dex.js';
+import { calculateLevel50Stats, canLearnMove, getItemExists, getMove, getSpecies, isAbilityAvailable, regulationSpecies, statAlignmentOptions, toID } from './dex.js';
 import { teamSchema, type Team, type ValidationResult } from './types.js';
 
 export function validateTeam(input: unknown): ValidationResult {
@@ -31,6 +31,12 @@ export function validateTeam(input: unknown): ValidationResult {
 
     if (!isAbilityAvailable(pokemon)) errors.push(`${species.name}: 특성 ${pokemon.ability}을 사용할 수 없습니다.`);
     if (!alignments.has(pokemon.statAlignment)) errors.push(`${species.name}: Stat Alignment ${pokemon.statAlignment}을 사용할 수 없습니다.`);
+    const statPointTotal = Object.values(pokemon.statPoints).reduce((sum, value) => sum + value, 0);
+    if (statPointTotal < 66) warnings.push(`${species.name}: 능력 포인트를 ${statPointTotal}/66만 사용했습니다.`);
+    const calculatedStats = calculateLevel50Stats(species.name, pokemon.statPoints, pokemon.statAlignment);
+    if (calculatedStats && Object.keys(calculatedStats).some((stat) => calculatedStats[stat as keyof typeof calculatedStats] !== pokemon.stats[stat as keyof typeof pokemon.stats])) {
+      warnings.push(`${species.name}: 입력된 실제 스탯이 능력 포인트 자동 계산값과 다릅니다. 실제 게임 수치를 최종값으로 사용합니다.`);
+    }
     if (pokemon.heldItem) {
       if (!getItemExists(pokemon.heldItem)) errors.push(`${species.name}: 도구 ${pokemon.heldItem}을 찾을 수 없습니다.`);
       const itemId = toID(pokemon.heldItem);

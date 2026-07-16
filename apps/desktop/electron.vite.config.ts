@@ -9,7 +9,10 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
-    build: { sourcemap: true },
+    build: {
+      sourcemap: true,
+      rollupOptions: { output: { format: 'cjs' } },
+    },
   },
   renderer: {
     resolve: { alias: { '@renderer': resolve('src/renderer/src') } },

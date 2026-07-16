@@ -1,4 +1,4 @@
-import type { BattleState, PreviewInput, PreviewRecommendation, Recommendation, Team, TurnInput, ValidationResult, VisionResult } from '@pochamp/engine';
+import type { BattleState, PreviewInput, PreviewRecommendation, Recommendation, StatBlock, Team, TurnInput, ValidationResult, VisionResult } from '@pochamp/engine';
 
 export interface CropRect { x: number; y: number; width: number; height: number }
 
@@ -58,15 +58,45 @@ export interface BootstrapData {
     species: Array<{
       id: string;
       name: string;
+      displayName: string;
       nationalDex: number;
       supported: boolean;
+      baseStats: StatBlock;
       abilities: string[];
       moves: string[];
       megaEligible: boolean;
+      usage: {
+        rank: number | null;
+        moves: Array<{ name: string; usage: number }>;
+        abilities: Array<{ name: string; usage: number }>;
+        items: Array<{ name: string; usage: number }>;
+        statAlignments: Array<{ name: string; usage: number }>;
+      };
     }>;
     allowedMegas: readonly string[];
     items: string[];
-    statAlignments: Array<{ id: string; raised: string | null; lowered: string | null }>;
+    statAlignments: Array<{
+      id: string;
+      raised: string | null;
+      lowered: string | null;
+      raisedStat: keyof StatBlock | null;
+      loweredStat: keyof StatBlock | null;
+    }>;
+    localization: {
+      checkedAt: string;
+      source: string;
+      species: Record<string, string>;
+      moves: Record<string, string>;
+      abilities: Record<string, string>;
+      items: Record<string, string>;
+      natures: Record<string, string>;
+    };
+    meta: {
+      checkedAt: string;
+      source: string;
+      format: string;
+      limitation: string;
+    };
   };
 }
 

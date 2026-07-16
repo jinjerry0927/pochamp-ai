@@ -31,10 +31,10 @@ git push origin main --follow-tags
 
 ## 자동 업데이트 주소
 
-GitHub 저장소가 정해지면 앱의 기본 업데이트 주소를 다음 형식으로 설정합니다.
+앱의 기본 업데이트 주소는 다음 공개 GitHub Release 경로로 설정되어 있습니다.
 
 ```text
-https://github.com/<owner>/<repo>/releases/latest/download/
+https://github.com/jinjerry0927/pochamp-ai/releases/latest/download/
 ```
 
 앱에는 GitHub 토큰을 넣지 않습니다. 따라서 이 방식으로 자동 업데이트 파일을 제공하려면 Release 자산을 공개적으로 읽을 수 있어야 합니다. 소스 저장소를 비공개로 유지해야 한다면 별도의 공개 Release 저장소 또는 전용 HTTPS 스토리지를 사용합니다.

@@ -58,7 +58,7 @@ npm run audit:security
 
 설정의 `앱 업데이트`에서 신뢰할 수 있는 HTTPS 업데이트 서버 주소를 한 번 등록하면 앱이 시작 후와 6시간마다 새 버전을 확인합니다. 새 버전은 앱 안에서 다운로드한 뒤 `재시작 및 설치`할 수 있으므로 매번 브라우저에서 설치 파일을 받을 필요가 없습니다. 배포자는 `release` 폴더의 설치 파일, blockmap, `latest.yml`을 같은 HTTPS 경로에 올려야 합니다.
 
-현재 저장소에는 실제 배포 서버가 연결되어 있지 않습니다. 공개 배포를 시작하기 전에는 서버 주소와 Windows 코드 서명을 함께 확정해야 합니다. 자세한 보안 기준은 [SECURITY.md](./docs/SECURITY.md)를 참고하세요.
+기본 업데이트 서버는 [jinjerry0927/pochamp-ai Releases](https://github.com/jinjerry0927/pochamp-ai/releases)에 연결되어 있습니다. 공개 Release에 설치 파일, blockmap, `latest.yml`이 모두 게시된 버전부터 앱 내 업데이트가 동작합니다. Windows 코드 서명 전 빌드는 자동으로 Draft Release에만 올립니다. 자세한 보안 기준은 [SECURITY.md](./docs/SECURITY.md)를 참고하세요.
 
 소스 버전과 배포 자동화는 Git 태그와 GitHub Actions를 기준으로 구성했습니다. 저장소 연결, 태그 릴리스, 코드 서명 설정은 [RELEASE.md](./docs/RELEASE.md)를 참고하세요.
 
