@@ -2,17 +2,19 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, nativeIma
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
-import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
+import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team, type VisionResult } from '@pochamp/engine';
 import { z } from 'zod';
 import { AppStore } from './store.js';
 import { analyzeWithNim } from './nim.js';
-import type { CaptureAnalysis, CropRect, HistoryEntry } from '../shared/contracts.js';
+import { VisionReferenceStore } from './vision-references.js';
+import type { CaptureAnalysis, CropRect, HistoryEntry, LocalVisionSlot } from '../shared/contracts.js';
 import { UpdateManager } from './updater.js';
 
 let mainWindow: BrowserWindow | null = null;
 let lastCaptureHash = '';
 let store: AppStore;
 let updateManager: UpdateManager;
+let visionReferences: VisionReferenceStore;
 
 app.enableSandbox();
 
@@ -55,6 +57,11 @@ const historyEntrySchema = z.object({
   actualAction: z.string().max(500).optional(),
   result: z.enum(['win', 'loss', 'unknown']).optional(),
 }).strict();
+const visionTrainingSamplesSchema = z.array(z.object({
+  slot: z.number().int().min(1).max(6),
+  species: z.string().min(1).max(100),
+  imageDataUrl: z.string().max(2_000_000).regex(/^data:image\/png;base64,/i),
+}).strict()).min(1).max(6);
 
 function handle<T extends unknown[], R>(channel: string, listener: (...args: T) => R): void {
   ipcMain.handle(channel, (event, ...args) => {
@@ -116,6 +123,28 @@ async function captureSelectedSource(): Promise<{ duplicate: boolean; dataUrl?: 
   return { duplicate: false, dataUrl: nativeImage.createFromBuffer(png).toDataURL() };
 }
 
+function mergeLocalCandidates(vision: VisionResult, localSlots: LocalVisionSlot[]): VisionResult {
+  const slots = Array.from({ length: 6 }, (_, index) => {
+    const slot = index + 1;
+    const recognized = vision.opponentPreviewSlots.find((entry) => entry.slot === slot);
+    const local = localSlots.find((entry) => entry.slot === slot);
+    const candidates = [...new Set([
+      ...(recognized?.candidates ?? []),
+      ...(local?.candidates.map((candidate) => candidate.species) ?? []),
+    ])].filter((candidate) => candidate !== recognized?.species).slice(0, 3);
+    if (!recognized && !local) return null;
+    const bestLocal = local?.candidates[0];
+    return {
+      slot,
+      species: recognized?.species ?? null,
+      candidates,
+      confidence: Math.max(recognized?.confidence ?? 0, (bestLocal?.confidence ?? 0) * 0.85),
+      evidence: recognized?.evidence || (bestLocal ? `로컬 이미지 대조 ${bestLocal.source === 'learned' ? 'Champions 학습본' : '초기 아이콘'}` : ''),
+    };
+  }).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  return { ...vision, opponentPreviewSlots: slots };
+}
+
 function registerIpc(): void {
   handle('app:bootstrap', async () => ({
     settings: await store.getPublicSettings(),
@@ -168,20 +197,26 @@ function registerIpc(): void {
     if (!settings.consentAccepted) throw new Error('설정에서 NVIDIA 화면 전송 고지에 먼저 동의하세요.');
     const capture = await captureSelectedSource();
     if (capture.duplicate) return { duplicate: true, latencyMs: Math.round(performance.now() - started), warning: '직전 프레임과 같아 API 호출을 생략했습니다.' };
+    const localVisionSlots = await visionReferences.matchPreview(nativeImage.createFromDataURL(capture.dataUrl!));
     const apiKey = await store.getApiKey();
-    if (!apiKey) return { duplicate: false, screenshot: capture.dataUrl, latencyMs: Math.round(performance.now() - started), warning: 'API 키가 없어 수동 입력 모드로 전환했습니다.' };
+    if (!apiKey) return { duplicate: false, screenshot: capture.dataUrl, localVisionSlots, latencyMs: Math.round(performance.now() - started), warning: 'NVIDIA API 키가 없어 로컬 이미지 후보만 표시합니다.' };
     try {
-      const vision = await analyzeWithNim({
+      const vision = mergeLocalCandidates(await analyzeWithNim({
         apiKey,
         model: settings.model,
         imageDataUrl: capture.dataUrl!,
         allowedSpecies: regulationSpecies().map((entry) => ({ name: entry.name, displayName: entry.displayName })),
-      });
-      return { duplicate: false, screenshot: capture.dataUrl, vision, latencyMs: Math.round(performance.now() - started) };
+        localVisionSlots,
+      }), localVisionSlots);
+      return { duplicate: false, screenshot: capture.dataUrl, vision, localVisionSlots, latencyMs: Math.round(performance.now() - started) };
     } catch (error) {
-      return { duplicate: false, screenshot: capture.dataUrl, latencyMs: Math.round(performance.now() - started), warning: `화면 인식 실패: ${error instanceof Error ? error.message : String(error)}. 수동 입력을 사용하세요.` };
+      return { duplicate: false, screenshot: capture.dataUrl, localVisionSlots, latencyMs: Math.round(performance.now() - started), warning: `NVIDIA 인식 실패: ${error instanceof Error ? error.message : String(error)}. 로컬 후보를 확인하세요.` };
     }
   });
+
+  handle('vision-reference:status', () => visionReferences.status());
+  handle('vision-reference:seed', () => visionReferences.seed());
+  handle('vision-reference:learn', (input: unknown) => visionReferences.learn(visionTrainingSamplesSchema.parse(input)));
 
   handle('team:validate', (team: unknown) => validateTeam(team));
   handle('team:save', async (input: unknown) => {
@@ -212,6 +247,15 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_event, window) => optimizer.watchWindowShortcuts(window));
   store = new AppStore();
   updateManager = new UpdateManager(() => mainWindow);
+  visionReferences = new VisionReferenceStore(
+    join(app.getPath('userData'), 'vision-references'),
+    regulationSpecies().map((entry) => ({ name: entry.name, displayName: entry.displayName, nationalDex: entry.nationalDex })),
+    {
+      createFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer),
+      createFromDataURL: (dataUrl) => nativeImage.createFromDataURL(dataUrl),
+    },
+  );
+  await visionReferences.initialize();
   registerIpc();
   createWindow();
   const settings = await store.getPublicSettings();
