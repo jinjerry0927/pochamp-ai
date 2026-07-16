@@ -155,7 +155,7 @@ function registerIpc(): void {
   handle('settings:update', async (input: unknown) => {
     const patch = settingsPatchSchema.parse(input);
     const settings = await store.updateSettings(patch);
-    if (typeof patch.alwaysOnTop === 'boolean') mainWindow?.setAlwaysOnTop(patch.alwaysOnTop);
+    mainWindow?.setAlwaysOnTop(false);
     if (typeof patch.updateFeedUrl === 'string') updateManager.configure(settings.updateFeedUrl);
     return settings;
   });
@@ -215,7 +215,7 @@ app.whenReady().then(async () => {
   registerIpc();
   createWindow();
   const settings = await store.getPublicSettings();
-  mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
+  mainWindow?.setAlwaysOnTop(false);
   updateManager.configure(settings.updateFeedUrl);
   globalShortcut.register('CommandOrControl+Shift+Space', () => mainWindow?.webContents.send('hotkey:capture'));
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

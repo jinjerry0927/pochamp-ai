@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { BattleState, PreviewRecommendation, Recommendation, Team, VisionResult } from '@pochamp/engine';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { BattlePokemonState, BattleState, PreviewRecommendation, Recommendation, Team, VisionResult } from '@pochamp/engine';
 import type { BootstrapData, HistoryEntry } from '../../shared/contracts';
 import { battlePokemonState } from './model';
 import { RecommendationCard } from './RecommendationCard';
@@ -12,6 +12,10 @@ interface Props {
 
 const emptyPreviewSlots = (): string[] => Array.from({ length: 6 }, () => '');
 const splitSpecies = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 6);
+const splitMoves = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 4);
+const statusOptions: Array<[BattlePokemonState['status'], string]> = [
+  ['none', '정상'], ['sleep', '잠듦'], ['burn', '화상'], ['poison', '독'], ['toxic', '맹독'], ['paralysis', '마비'], ['freeze', '얼음'], ['unknown', '미확인'],
+];
 
 export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [opponentText, setOpponentText] = useState('');
@@ -20,6 +24,16 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [ownActiveId, setOwnActiveId] = useState('');
   const [ownHp, setOwnHp] = useState(100);
   const [opponentHp, setOpponentHp] = useState(100);
+  const [turn, setTurn] = useState(1);
+  const [ownStatus, setOwnStatus] = useState<BattlePokemonState['status']>('none');
+  const [opponentStatus, setOpponentStatus] = useState<BattlePokemonState['status']>('none');
+  const [ownDrowsy, setOwnDrowsy] = useState(false);
+  const [opponentDrowsy, setOpponentDrowsy] = useState(false);
+  const [weather, setWeather] = useState<BattleState['weather']>('none');
+  const [terrain, setTerrain] = useState<BattleState['terrain']>('none');
+  const [trickRoomTurns, setTrickRoomTurns] = useState(0);
+  const [opponentMoves, setOpponentMoves] = useState('');
+  const [monitoring, setMonitoring] = useState(false);
   const [vision, setVision] = useState<VisionResult | null>(null);
   const [screenshot, setScreenshot] = useState('');
   const [confirmed, setConfirmed] = useState(true);
@@ -27,6 +41,8 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [busy, setBusy] = useState(false);
   const [previewRecommendation, setPreviewRecommendation] = useState<PreviewRecommendation | null>(null);
   const [turnRecommendation, setTurnRecommendation] = useState<Recommendation | null>(null);
+  const captureInFlight = useRef(false);
+  const lastAutoRecommendation = useRef('');
 
   useEffect(() => {
     if (team && !ownActiveId) setOwnActiveId(team.pokemon[0]?.id ?? '');
@@ -49,6 +65,10 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     [opponentText, resolveSpeciesName],
   );
   const selectedIds = previewRecommendation?.selectedPokemonIds ?? team?.pokemon.slice(0, 3).map((pokemon) => pokemon.id) ?? [];
+  const selectedOrder = useMemo(() => {
+    if (!previewRecommendation) return [];
+    return [previewRecommendation.leadPokemonId, ...previewRecommendation.selectedPokemonIds.filter((id) => id !== previewRecommendation.leadPokemonId)];
+  }, [previewRecommendation]);
 
   const applyPreviewSlots = (slots: string[], needsConfirmation: boolean) => {
     const normalized = Array.from({ length: 6 }, (_, index) => slots[index] ?? '');
@@ -71,6 +91,8 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   };
 
   const capture = useCallback(async () => {
+    if (captureInFlight.current) return;
+    captureInFlight.current = true;
     setBusy(true);
     setStatus('BlueStacks 화면을 읽는 중…');
     try {
@@ -98,25 +120,41 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
         }
         if (result.vision.ownHpPercent !== null) setOwnHp(result.vision.ownHpPercent);
         if (result.vision.opponentHpPercent !== null) setOpponentHp(result.vision.opponentHpPercent);
+        if (result.vision.ownStatus !== null) setOwnStatus(result.vision.ownStatus);
+        if (result.vision.opponentStatus !== null) setOpponentStatus(result.vision.opponentStatus);
+        setOwnDrowsy(result.vision.ownVolatileStatuses.includes('drowsy'));
+        setOpponentDrowsy(result.vision.opponentVolatileStatuses.includes('drowsy'));
+        if (result.vision.weather !== null) setWeather(result.vision.weather);
+        if (result.vision.terrain !== null) setTerrain(result.vision.terrain);
+        if (result.vision.trickRoomTurns !== null) setTrickRoomTurns(result.vision.trickRoomTurns);
+        if (result.vision.visibleMoves.length) setOpponentMoves(result.vision.visibleMoves.join('\n'));
+        const autoConfirmed = monitoring
+          && result.vision.phase === 'turn'
+          && result.vision.confidence >= 0.82
+          && Boolean(result.vision.opponentActiveSpecies)
+          && Boolean(result.vision.ownActiveSpecies || ownActiveId);
+        setConfirmed(autoConfirmed);
+        if (autoConfirmed) setStatus(`연속 분석 상태 자동 확인 · 신뢰도 ${Math.round(result.vision.confidence * 100)}%`);
       }
-      setStatus(result.warning ?? `인식 초안 완료 · ${result.latencyMs}ms`);
+      if (!result.vision || !monitoring || result.vision.confidence < 0.82) setStatus(result.warning ?? `인식 초안 완료 · ${result.latencyMs}ms`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      captureInFlight.current = false;
       setBusy(false);
     }
-  }, [team, ownActiveId]);
+  }, [monitoring, team, ownActiveId]);
 
   useEffect(() => window.pochamp.onCaptureHotkey(capture), [capture]);
 
-  const record = async (kind: 'preview' | 'turn', recommendation: PreviewRecommendation | Recommendation) => {
+  const record = useCallback(async (kind: 'preview' | 'turn', recommendation: PreviewRecommendation | Recommendation) => {
     if (!team) return;
     const entry: HistoryEntry = {
       id: crypto.randomUUID(), createdAt: new Date().toISOString(), kind, teamName: team.name,
       opponent: opponentSpecies, recommendation,
     };
     onHistory(await window.pochamp.addHistory(entry));
-  };
+  }, [onHistory, opponentSpecies, team]);
 
   const runPreview = async () => {
     if (!team || opponentSpecies.length < 3) {
@@ -137,7 +175,7 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     }
   };
 
-  const runTurn = async () => {
+  const runTurn = useCallback(async () => {
     if (!team || !opponentActive || !confirmed) {
       setStatus(!confirmed ? '인식 결과를 먼저 확인해 주세요.' : '팀과 상대 활성 포켓몬이 필요합니다.');
       return;
@@ -154,39 +192,53 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     }
     const selected = team.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id));
     const state: BattleState = {
-      phase: 'turn', turn: 1, selectedOwnIds: selectedIds, opponentPreview: opponentSpecies,
-      ownActive: battlePokemonState(active, ownHp),
+      phase: 'turn', turn, selectedOwnIds: selectedIds, opponentPreview: opponentSpecies,
+      ownActive: { ...battlePokemonState(active, ownHp), status: ownStatus, volatileStatuses: ownDrowsy ? ['drowsy'] : [] },
       opponentActive: {
-        species: resolvedOpponentActive, currentHp: opponentHp, maxHp: 100, status: 'none', fainted: opponentHp <= 0,
+        species: resolvedOpponentActive, currentHp: opponentHp, maxHp: 100, status: opponentStatus, volatileStatuses: opponentDrowsy ? ['drowsy'] : [], fainted: opponentHp <= 0,
         boosts: { attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0, accuracy: 0, evasion: 0 },
-        remainingPp: {}, revealedMoves: vision?.visibleMoves ?? [],
+        remainingPp: {}, revealedMoves: splitMoves(opponentMoves),
       },
       ownBench: selected.filter((pokemon) => pokemon.id !== active.id).map((pokemon) => battlePokemonState(pokemon)),
-      opponentBench: [], weather: 'none', terrain: 'none', ownHazards: [], opponentHazards: [],
-      ownMegaUsed: false, opponentMegaUsed: false,
+      opponentBench: [], weather, terrain, ownHazards: [], opponentHazards: [],
+      ownMegaUsed: false, opponentMegaUsed: false, trickRoomTurns,
     };
     setBusy(true);
     try {
       const recommendation = await window.pochamp.recommendTurn({ team, state, rolloutCount: 256 });
       setTurnRecommendation(recommendation);
       await record('turn', recommendation);
-      setStatus('턴 추천 완료');
+      setStatus(`턴 ${turn} 행동 추천 완료`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
-  };
+  }, [confirmed, opponentActive, opponentDrowsy, opponentHp, opponentMoves, opponentSpecies, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownStatus, record, resolveSpeciesName, selectedIds, team, terrain, trickRoomTurns, turn, weather]);
+
+  useEffect(() => {
+    if (!monitoring || !confirmed || !vision || vision.phase !== 'turn' || busy) return;
+    const signature = JSON.stringify([vision, ownActiveId, opponentActive, ownHp, opponentHp, ownStatus, opponentStatus, ownDrowsy, opponentDrowsy, weather, terrain, trickRoomTurns, opponentMoves]);
+    if (lastAutoRecommendation.current === signature) return;
+    lastAutoRecommendation.current = signature;
+    void runTurn();
+  }, [busy, confirmed, monitoring, opponentActive, opponentDrowsy, opponentHp, opponentMoves, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownStatus, runTurn, terrain, trickRoomTurns, vision, weather]);
+
+  useEffect(() => {
+    if (!monitoring) return;
+    void capture();
+    const timer = window.setInterval(() => void capture(), 6_000);
+    return () => window.clearInterval(timer);
+  }, [capture, monitoring]);
 
   return (
     <section className="page-stack">
       <div className="section-heading">
         <div><span className="eyebrow">BlueStacks 캡처 · 친선전</span><h2>배틀 도우미</h2></div>
-        <button className="capture-button" disabled={busy} onClick={capture}>
-          <kbd>Ctrl Shift Space</kbd>{busy ? '분석 중…' : '현재 화면 캡처'}
-        </button>
+        <div className="capture-controls"><button className={monitoring ? 'monitor-button active' : 'monitor-button'} onClick={() => { setMonitoring((current) => !current); setStatus(monitoring ? '연속 화면 분석을 중지했습니다.' : '연속 화면 분석을 시작합니다. 6초마다 변경 화면을 확인합니다.'); }}>{monitoring ? '● 연속 분석 중지' : '○ 연속 화면 분석'}</button><button className="capture-button" disabled={busy} onClick={capture}><kbd>Ctrl Shift Space</kbd>{busy ? '분석 중…' : '현재 화면 캡처'}</button></div>
       </div>
       <div className="status-line"><span className={busy ? 'pulse' : ''} />{status}</div>
+      {monitoring && <div className="monitor-notice">화면이 바뀐 프레임만 NVIDIA로 전송합니다. 신뢰도 82% 이상인 턴은 상태를 자동 반영해 행동을 다시 추천하며, 게임 조작은 하지 않습니다.</div>}
       {!team && <div className="validation error">먼저 ‘내 팀’에서 정확한 6마리 팀을 저장하세요.</div>}
       <div className="battle-layout">
         <div className="battle-inputs">
@@ -230,19 +282,24 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
           </label>
           <button className="primary full" disabled={!team || busy || opponentSpecies.length < 3} onClick={runPreview}>출전 3마리와 선봉 추천</button>
           {previewRecommendation && (
-            <div className="roles">
-              {Object.entries(previewRecommendation.roles).map(([id, role]) => (
-                <div key={id}><b>{speciesName(team?.pokemon.find((pokemon) => pokemon.id === id)?.species ?? id)}</b><span>{role}</span></div>
-              ))}
-            </div>
+            <><div className="selection-ranking">{selectedOrder.map((id, index) => <div key={id}><b>{index + 1}순위</b><strong>{speciesName(team?.pokemon.find((pokemon) => pokemon.id === id)?.species ?? id)}</strong><span>{index === 0 ? '선봉' : previewRecommendation.roles[id]}</span></div>)}</div><div className="roles">{Object.entries(previewRecommendation.roles).map(([id, role]) => <div key={id}><b>{speciesName(team?.pokemon.find((pokemon) => pokemon.id === id)?.species ?? id)}</b><span>{role}</span></div>)}</div></>
           )}
           <div className="turn-fields">
+            <label className="field"><span>현재 턴</span><input type="number" min="1" value={turn} onChange={(event) => setTurn(Math.max(1, Number(event.target.value)))} /></label>
             <label className="field"><span>내 활성 포켓몬</span><select value={ownActiveId} onChange={(event) => setOwnActiveId(event.target.value)}>{team?.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id)).map((pokemon) => <option key={pokemon.id} value={pokemon.id}>{speciesName(pokemon.species)}</option>)}</select></label>
             <label className="field"><span>상대 활성 포켓몬</span><input list="battle-species-list" value={opponentActive} onChange={(event) => setOpponentActive(event.target.value)} /></label>
             <label className="field"><span>내 HP %</span><input type="number" min="0" max="100" value={ownHp} onChange={(event) => setOwnHp(Number(event.target.value))} /></label>
             <label className="field"><span>상대 HP %</span><input type="number" min="0" max="100" value={opponentHp} onChange={(event) => setOpponentHp(Number(event.target.value))} /></label>
+            <label className="field"><span>내 상태</span><select value={ownStatus} onChange={(event) => setOwnStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="field"><span>상대 상태</span><select value={opponentStatus} onChange={(event) => setOpponentStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="check state-check"><input type="checkbox" checked={ownDrowsy} onChange={(event) => setOwnDrowsy(event.target.checked)} />내 포켓몬이 하품으로 다음 턴 잠듦</label>
+            <label className="check state-check"><input type="checkbox" checked={opponentDrowsy} onChange={(event) => setOpponentDrowsy(event.target.checked)} />상대가 하품으로 다음 턴 잠듦</label>
+            <label className="field"><span>날씨</span><select value={weather} onChange={(event) => setWeather(event.target.value as BattleState['weather'])}><option value="none">없음</option><option value="rain">비</option><option value="sun">쾌청</option><option value="sand">모래바람</option><option value="snow">설경</option><option value="unknown">미확인</option></select></label>
+            <label className="field"><span>필드</span><select value={terrain} onChange={(event) => setTerrain(event.target.value as BattleState['terrain'])}><option value="none">없음</option><option value="electric">일렉트릭</option><option value="grassy">그래스</option><option value="misty">미스트</option><option value="psychic">사이코</option><option value="unknown">미확인</option></select></label>
+            <label className="field"><span>트릭룸 남은 턴</span><input type="number" min="0" max="5" value={trickRoomTurns} onChange={(event) => setTrickRoomTurns(Math.max(0, Math.min(5, Number(event.target.value))))} /></label>
+            <label className="field"><span>상대가 공개한 기술 · 쉼표/줄바꿈</span><textarea rows={2} value={opponentMoves} onChange={(event) => setOpponentMoves(event.target.value)} placeholder={'하품\n트릭룸'} /></label>
           </div>
-          <button className="primary full" disabled={!team || busy || !opponentActive} onClick={runTurn}>기술 · 교체 통합 추천</button>
+          <button className="primary full" disabled={!team || busy || !opponentActive} onClick={runTurn}>현재 상태로 행동 1~3순위 추천</button>
         </div>
         <div className="recommendation-column">
           {turnRecommendation ? <RecommendationCard recommendation={turnRecommendation} /> : previewRecommendation ? <RecommendationCard recommendation={previewRecommendation} /> : <div className="empty-recommendation"><span>AI</span><h3>추천 대기 중</h3><p>팀 미리보기나 현재 턴 상태를 입력하면 근거와 대안을 비교합니다.</p></div>}

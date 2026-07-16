@@ -15,13 +15,16 @@ const toID = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 interface Props {
   team: Team;
+  savedTeams: Team[];
   regulation: BootstrapData['regulation'];
   validation: ValidationResult | null;
   onChange(team: Team): void;
+  onLoad(team: Team): void;
+  onNew(): void;
   onSave(): void;
 }
 
-export function TeamEditor({ team, regulation, validation, onChange, onSave }: Props) {
+export function TeamEditor({ team, savedTeams, regulation, validation, onChange, onLoad, onNew, onSave }: Props) {
   const [speciesSort, setSpeciesSort] = useState<'name' | 'dex-desc'>('name');
   const [speciesQueries, setSpeciesQueries] = useState<Record<number, string>>({});
 
@@ -97,9 +100,10 @@ export function TeamEditor({ team, regulation, validation, onChange, onSave }: P
   return (
     <section className="page-stack">
       <div className="section-heading">
-        <div><span className="eyebrow">실제 Champions 능력 포인트 기준</span><h2>내 팀 등록</h2></div>
+        <div><span className="eyebrow">실제 Champions 능력 포인트 기준</span><h2>팀 제작</h2></div>
         <button className="primary" onClick={onSave}>팀 검증 및 저장</button>
       </div>
+      <div className="builder-team-bar"><div><b>저장 팀 불러오기</b><span>팀 이름을 누르면 6마리의 모든 설정을 그대로 불러와 수정합니다.</span></div><div>{savedTeams.map((saved) => <button className={saved.id === team.id ? 'active' : ''} key={saved.id} onClick={() => onLoad(saved)}>{saved.name}</button>)}<button onClick={onNew}>＋ 새 팀</button></div></div>
       <div className="notice"><b>성격은 게임의 Stat Alignment와 같은 항목입니다.</b> 기본 종족값에 H/A/B/C/D/S 능력 포인트를 총 66점, 능력치별 최대 32점까지 배분하면 실제 Lv.50 스탯을 자동 계산합니다.</div>
       <div className="meta-note"><b>M-B 사용률 우선 정렬 · {regulation.meta.checkedAt}</b><span>{regulation.meta.limitation}</span></div>
       <div className="editor-toolbar">

@@ -51,7 +51,7 @@ export function SettingsPanel({ settings, onSettings }: Props) {
         <label className="check consent"><input type="checkbox" checked={settings.consentAccepted} onChange={(event) => void update({ consentAccepted: event.target.checked })} />화면 전송 사실을 확인했고 개인 친선전에서만 사용합니다.</label>
         <label className="field"><span>모델 ID</span><input value={settings.model} onChange={(event) => void update({ model: event.target.value })} /></label>
         <div className="api-row"><label className="field"><span>NVIDIA API 키</span><input type="password" value={apiKey} placeholder={settings.hasApiKey ? '보안 저장소에 등록됨' : 'nvapi-…'} onChange={(event) => setApiKey(event.target.value)} /></label><button className="primary" onClick={async () => { try { onSettings(await window.pochamp.setApiKey(apiKey)); setApiKey(''); setMessage('API 키를 Windows 보안 저장소에 저장했습니다.'); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } }}>키 저장</button><button onClick={async () => onSettings(await window.pochamp.clearApiKey())}>삭제</button></div>
-        <label className="check"><input type="checkbox" checked={settings.alwaysOnTop} onChange={(event) => void update({ alwaysOnTop: event.target.checked })} />추천 창을 항상 위에 표시</label>
+        <div className="notice">앱 창은 일반 창으로 동작합니다. Chrome이나 다른 프로그램을 누르면 포챔 AI는 그 창 뒤로 이동합니다.</div>
       </article>
       <article className="settings-card">
         <h3>3. 앱 업데이트</h3>

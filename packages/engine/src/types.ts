@@ -65,12 +65,16 @@ export const boostsSchema = z.object({
   evasion: z.number().int().min(-6).max(6).default(0),
 });
 
+export const statusConditionSchema = z.enum(['none', 'burn', 'poison', 'toxic', 'paralysis', 'sleep', 'freeze', 'unknown']);
+export const volatileStatusSchema = z.enum(['drowsy', 'confusion', 'taunt', 'encore', 'substitute', 'leech-seed']);
+
 export const battlePokemonStateSchema = z.object({
   teamPokemonId: z.string().optional(),
   species: z.string().min(1),
   currentHp: z.number().min(0),
   maxHp: z.number().positive(),
-  status: z.enum(['none', 'burn', 'poison', 'toxic', 'paralysis', 'sleep', 'freeze', 'unknown']).default('none'),
+  status: statusConditionSchema.default('none'),
+  volatileStatuses: z.array(volatileStatusSchema).max(6).optional(),
   fainted: z.boolean().default(false),
   boosts: boostsSchema,
   remainingPp: z.record(z.string(), z.number().int().nonnegative()).default({}),
@@ -94,6 +98,7 @@ export const battleStateSchema = z.object({
   opponentHazards: z.array(z.string()).default([]),
   ownMegaUsed: z.boolean().default(false),
   opponentMegaUsed: z.boolean().default(false),
+  trickRoomTurns: z.number().int().min(0).max(5).default(0),
 });
 
 export const visionResultSchema = z.object({
@@ -104,8 +109,13 @@ export const visionResultSchema = z.object({
   opponentActiveSpecies: z.string().nullable().default(null),
   ownHpPercent: z.number().min(0).max(100).nullable().default(null),
   opponentHpPercent: z.number().min(0).max(100).nullable().default(null),
-  ownStatus: z.string().nullable().default(null),
-  opponentStatus: z.string().nullable().default(null),
+  ownStatus: statusConditionSchema.nullable().default(null),
+  opponentStatus: statusConditionSchema.nullable().default(null),
+  ownVolatileStatuses: z.array(volatileStatusSchema).max(6).default([]),
+  opponentVolatileStatuses: z.array(volatileStatusSchema).max(6).default([]),
+  weather: z.enum(['none', 'sun', 'rain', 'sand', 'snow', 'unknown']).nullable().default(null),
+  terrain: z.enum(['none', 'electric', 'grassy', 'misty', 'psychic', 'unknown']).nullable().default(null),
+  trickRoomTurns: z.number().int().min(0).max(5).nullable().default(null),
   visibleMoves: z.array(z.string()).max(4).default([]),
   opponentPreviewSlots: z.array(z.object({
     slot: z.number().int().min(1).max(6),

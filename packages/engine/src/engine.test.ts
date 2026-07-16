@@ -141,6 +141,26 @@ describe('추천', () => {
     expect(result.alternatives.length).toBeGreaterThan(0);
   });
 
+  it('수면·하품 대기·트릭룸 상태를 행동 순위에 반영한다', () => {
+    const baseState = { status: 'none' as const, volatileStatuses: [], fainted: false, boosts: { attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0, accuracy: 0, evasion: 0 }, revealedMoves: [] };
+    const state: BattleState = {
+      phase: 'turn', turn: 4, selectedOwnIds: ['garchomp', 'rotom', 'gengar'], opponentPreview: ['Charizard', 'Blastoise', 'Venusaur'],
+      ownActive: { ...baseState, teamPokemonId: 'garchomp', species: 'Garchomp', currentHp: 150, maxHp: 183, status: 'sleep', volatileStatuses: ['drowsy'] },
+      opponentActive: { ...baseState, species: 'Charizard', currentHp: 80, maxHp: 100, revealedMoves: ['Yawn', 'Trick Room'] },
+      ownBench: [
+        { ...baseState, teamPokemonId: 'rotom', species: 'Rotom-Wash', currentHp: 157, maxHp: 157 },
+        { ...baseState, teamPokemonId: 'gengar', species: 'Gengar', currentHp: 135, maxHp: 135 },
+      ],
+      opponentBench: [], weather: 'none', terrain: 'none', ownHazards: [], opponentHazards: [], ownMegaUsed: false, opponentMegaUsed: false, trickRoomTurns: 3,
+    };
+    const result = recommendTurn({ team, state, rolloutCount: 64 });
+    expect(result.primaryAction.kind).toBe('switch');
+    expect(result.assumptions).toEqual(expect.arrayContaining([
+      expect.stringContaining('트릭룸'),
+      expect.stringContaining('하품'),
+    ]));
+  });
+
   it('강제 교체와 PP 0 상태에서는 기술 후보를 제외한다', () => {
     const baseState = { status: 'none' as const, fainted: false, boosts: { attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0, accuracy: 0, evasion: 0 }, revealedMoves: [] };
     const state: BattleState = {
