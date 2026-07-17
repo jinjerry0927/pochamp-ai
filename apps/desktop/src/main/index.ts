@@ -2,7 +2,7 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, nativeIma
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
-import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
+import { battleStateSchema, getSpecies, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
 import { z } from 'zod';
 import { AppStore } from './store.js';
 import { analyzeWithNim } from './nim.js';
@@ -194,8 +194,12 @@ function registerIpc(): void {
         apiKey,
         model: settings.model,
         imageDataUrl: capture.dataUrl!,
-        slotImageDataUrls: localVisionSlots.map((slot) => slot.imageDataUrl),
-        allowedSpecies: regulationSpecies().map((entry) => ({ name: entry.name, displayName: entry.displayName })),
+        slotImageDataUrls: localVisionSlots.map((slot) => slot.contextImageDataUrl ?? slot.imageDataUrl),
+        allowedSpecies: regulationSpecies().map((entry) => ({
+          name: entry.name,
+          displayName: entry.displayName,
+          types: getSpecies(entry.name)?.types ?? [],
+        })),
         localVisionSlots,
       }), localVisionSlots);
       return { duplicate: false, screenshot: capture.dataUrl, vision, localVisionSlots, latencyMs: Math.round(performance.now() - started) };

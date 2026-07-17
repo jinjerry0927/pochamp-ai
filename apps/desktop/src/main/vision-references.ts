@@ -33,6 +33,8 @@ export interface LocalVisionCandidate {
 export interface LocalVisionSlot {
   slot: number;
   imageDataUrl: string;
+  contextImageDataUrl?: string;
+  detectedTypes?: string[];
   candidates: LocalVisionCandidate[];
 }
 
@@ -71,6 +73,7 @@ interface ReferenceManifest {
 interface CachedReference {
   entry: ReferenceEntry;
   descriptor: number[];
+  template?: { bitmap: Buffer; width: number; height: number };
 }
 
 export interface PokeApiPokemonRow {
@@ -79,6 +82,7 @@ export interface PokeApiPokemonRow {
 }
 
 const GRID_SIZE = 16;
+const TEMPLATE_SIZE = 96;
 const MAX_LEARNED_PER_SPECIES = 20;
 const SEED_REVISION = 3;
 const CROP_REVISION = 2;
@@ -88,6 +92,27 @@ const TYPE_NAMES: Record<number, string> = {
   1: 'Normal', 2: 'Fighting', 3: 'Flying', 4: 'Poison', 5: 'Ground', 6: 'Rock', 7: 'Bug', 8: 'Ghost', 9: 'Steel',
   10: 'Fire', 11: 'Water', 12: 'Grass', 13: 'Electric', 14: 'Psychic', 15: 'Ice', 16: 'Dragon', 17: 'Dark', 18: 'Fairy',
 };
+
+export const CHAMPIONS_TYPE_ICON_PALETTE = [
+  { type: 'Normal', red: 168, green: 168, blue: 152 },
+  { type: 'Fighting', red: 255, green: 128, blue: 0 },
+  { type: 'Flying', red: 128, green: 184, blue: 240 },
+  { type: 'Poison', red: 176, green: 64, blue: 184 },
+  { type: 'Ground', red: 144, green: 80, blue: 32 },
+  { type: 'Rock', red: 176, green: 168, blue: 128 },
+  { type: 'Bug', red: 160, green: 184, blue: 32 },
+  { type: 'Ghost', red: 112, green: 64, blue: 112 },
+  { type: 'Steel', red: 96, green: 160, blue: 184 },
+  { type: 'Fire', red: 232, green: 40, blue: 40 },
+  { type: 'Water', red: 40, green: 128, blue: 240 },
+  { type: 'Grass', red: 64, green: 160, blue: 40 },
+  { type: 'Electric', red: 248, green: 192, blue: 0 },
+  { type: 'Psychic', red: 240, green: 64, blue: 120 },
+  { type: 'Ice', red: 64, green: 216, blue: 255 },
+  { type: 'Dragon', red: 80, green: 80, blue: 200 },
+  { type: 'Dark', red: 64, green: 56, blue: 64 },
+  { type: 'Fairy', red: 240, green: 112, blue: 240 },
+] as const;
 
 const toID = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 const safeName = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'pokemon';
@@ -110,6 +135,17 @@ function fallbackOpponentSlotRect(size: { width: number; height: number }, slot:
 
 export function opponentSlotRect(size: { width: number; height: number }, slot: number): ImageRect {
   return fallbackOpponentSlotRect(size, slot);
+}
+
+export function opponentSlotContextRect(size: { width: number; height: number }, spriteRect: ImageRect): ImageRect {
+  const panelWidth = Math.max(spriteRect.width, Math.round(spriteRect.width / 0.52));
+  const x = Math.max(0, Math.round(spriteRect.x - panelWidth * 0.13));
+  return {
+    x,
+    y: spriteRect.y,
+    width: Math.max(1, Math.min(size.width - x, panelWidth)),
+    height: Math.max(1, Math.min(size.height - spriteRect.y, spriteRect.height)),
+  };
 }
 
 function isOpponentPanelPixel(bitmap: Buffer, offset: number): boolean {
@@ -210,6 +246,109 @@ export function cosineSimilarity(left: readonly number[], right: readonly number
     rightLength += rightValue * rightValue;
   }
   return leftLength && rightLength ? dot / Math.sqrt(leftLength * rightLength) : 0;
+}
+
+export function detectChampionTypesFromBgra(bitmap: Buffer, width: number, height: number): string[] {
+  if (bitmap.length < width * height * 4 || width < 8 || height < 8) return [];
+  const minimumX = Math.floor(width * 0.58);
+  const maximumX = Math.max(minimumX + 1, Math.floor(width * 0.99));
+  const minimumY = Math.floor(height * 0.02);
+  const maximumY = Math.max(minimumY + 1, Math.floor(height * 0.57));
+  const matches = new Map<string, { count: number; totalX: number }>();
+  const maximumDistanceSquared = 42 ** 2;
+  for (let y = minimumY; y < maximumY; y += 1) {
+    for (let x = minimumX; x < maximumX; x += 1) {
+      const offset = (y * width + x) * 4;
+      if ((bitmap[offset + 3] ?? 255) < 200) continue;
+      const red = bitmap[offset + 2] ?? 0;
+      const green = bitmap[offset + 1] ?? 0;
+      const blue = bitmap[offset] ?? 0;
+      let nearest: typeof CHAMPIONS_TYPE_ICON_PALETTE[number] | null = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const entry of CHAMPIONS_TYPE_ICON_PALETTE) {
+        const distance = (red - entry.red) ** 2 + (green - entry.green) ** 2 + (blue - entry.blue) ** 2;
+        if (distance >= nearestDistance) continue;
+        nearest = entry;
+        nearestDistance = distance;
+      }
+      if (!nearest || nearestDistance > maximumDistanceSquared) continue;
+      const current = matches.get(nearest.type) ?? { count: 0, totalX: 0 };
+      current.count += 1;
+      current.totalX += x;
+      matches.set(nearest.type, current);
+    }
+  }
+  const regionArea = Math.max(1, (maximumX - minimumX) * (maximumY - minimumY));
+  const minimumCount = Math.max(10, Math.floor(regionArea * 0.002));
+  const byCount = [...matches.entries()]
+    .filter(([, match]) => match.count >= minimumCount)
+    .sort((left, right) => right[1].count - left[1].count);
+  const strongestCount = byCount[0]?.[1].count ?? 0;
+  return byCount
+    .filter(([, match], index) => index === 0 || match.count >= strongestCount * 0.25)
+    .slice(0, 2)
+    .sort((left, right) => (left[1].totalX / left[1].count) - (right[1].totalX / right[1].count))
+    .map(([type]) => type);
+}
+
+export function templateSimilarityFromBgra(
+  captureBitmap: Buffer,
+  captureWidth: number,
+  captureHeight: number,
+  templateBitmap: Buffer,
+  templateWidth: number,
+  templateHeight: number,
+): number {
+  if (captureBitmap.length < captureWidth * captureHeight * 4
+    || templateBitmap.length < templateWidth * templateHeight * 4
+    || captureWidth < 3 || captureHeight < 3 || templateWidth < 3 || templateHeight < 3) return 0;
+  let best = 0;
+  for (const scale of [0.9, 1, 1.1]) {
+    const displayWidth = templateWidth * scale;
+    const displayHeight = templateHeight * scale;
+    const centeredX = (captureWidth - displayWidth) / 2;
+    const centeredY = (captureHeight - displayHeight) / 2;
+    for (let offsetY = -8; offsetY <= 8; offsetY += 4) {
+      for (let offsetX = -8; offsetX <= 8; offsetX += 4) {
+        let score = 0;
+        let weight = 0;
+        for (let y = 1; y < templateHeight - 1; y += 3) {
+          const captureY = Math.round(centeredY + offsetY + y * scale);
+          if (captureY < 1 || captureY >= captureHeight - 1) continue;
+          for (let x = 1; x < templateWidth - 1; x += 3) {
+            const captureX = Math.round(centeredX + offsetX + x * scale);
+            if (captureX < 1 || captureX >= captureWidth - 1) continue;
+            const templateOffset = (y * templateWidth + x) * 4;
+            const alpha = (templateBitmap[templateOffset + 3] ?? 0) / 255;
+            if (alpha < 0.7) continue;
+            const captureOffset = (captureY * captureWidth + captureX) * 4;
+            const blueDelta = (templateBitmap[templateOffset] ?? 0) - (captureBitmap[captureOffset] ?? 0);
+            const greenDelta = (templateBitmap[templateOffset + 1] ?? 0) - (captureBitmap[captureOffset + 1] ?? 0);
+            const redDelta = (templateBitmap[templateOffset + 2] ?? 0) - (captureBitmap[captureOffset + 2] ?? 0);
+            const colorDistance = Math.sqrt(redDelta ** 2 + greenDelta ** 2 + blueDelta ** 2) / 441.7;
+            const colorScore = Math.max(0, 1 - colorDistance);
+            const edgeAlpha = Math.min(
+              templateBitmap[templateOffset - 4 + 3] ?? 0,
+              templateBitmap[templateOffset + 4 + 3] ?? 0,
+              templateBitmap[templateOffset - templateWidth * 4 + 3] ?? 0,
+              templateBitmap[templateOffset + templateWidth * 4 + 3] ?? 0,
+            ) < 180;
+            let edgeScore = 0;
+            if (edgeAlpha) {
+              const center = ((captureBitmap[captureOffset + 2] ?? 0) + (captureBitmap[captureOffset + 1] ?? 0) + (captureBitmap[captureOffset] ?? 0)) / 3;
+              const neighborOffsets = [captureOffset - 4, captureOffset + 4, captureOffset - captureWidth * 4, captureOffset + captureWidth * 4];
+              edgeScore = Math.min(1, Math.max(...neighborOffsets.map((entry) => Math.abs(center - (((captureBitmap[entry + 2] ?? 0) + (captureBitmap[entry + 1] ?? 0) + (captureBitmap[entry] ?? 0)) / 3)))) / 60);
+            }
+            const sampleWeight = edgeAlpha ? 1.5 : 1;
+            score += (colorScore * 0.82 + edgeScore * 0.18) * sampleWeight;
+            weight += sampleWeight;
+          }
+        }
+        if (weight) best = Math.max(best, score / weight);
+      }
+    }
+  }
+  return best;
 }
 
 export function resolvePokeApiPokemonId(species: VisionSpeciesReference, rows: readonly PokeApiPokemonRow[]): number {
@@ -467,7 +606,14 @@ export class VisionReferenceStore {
       try {
         const image = this.images.createFromBuffer(await readFile(join(this.root, entry.file)));
         if (image.isEmpty()) return null;
-        return { entry, descriptor: descriptorFromImage(image, entry.kind === 'seed' ? 'seed' : 'capture') };
+        const templateImage = entry.kind === 'seed' && /-home\.png$/i.test(entry.file)
+          ? image.resize({ width: TEMPLATE_SIZE, height: TEMPLATE_SIZE, quality: 'better' })
+          : null;
+        return {
+          entry,
+          descriptor: descriptorFromImage(image, entry.kind === 'seed' ? 'seed' : 'capture'),
+          template: templateImage ? { bitmap: templateImage.toBitmap(), ...templateImage.getSize() } : undefined,
+        };
       } catch {
         return null;
       }
@@ -568,12 +714,34 @@ export class VisionReferenceStore {
     await this.initialize();
     if (image.isEmpty()) return [];
     const rects = opponentSlotRects(image);
+    const templateSpecies = new Set(this.cache.filter((reference) => reference.template).map((reference) => reference.entry.species));
     return Array.from({ length: 6 }, (_, index): LocalVisionSlot => {
-      const slotImage = image.crop(rects[index] ?? opponentSlotRect(image.getSize(), index + 1));
+      const spriteRect = rects[index] ?? opponentSlotRect(image.getSize(), index + 1);
+      const slotImage = image.crop(spriteRect);
+      const contextImage = image.crop(opponentSlotContextRect(image.getSize(), spriteRect));
       const descriptor = descriptorFromImage(slotImage, 'capture');
+      const contextSize = contextImage.getSize();
+      const detectedTypes = detectChampionTypesFromBgra(contextImage.toBitmap(), contextSize.width, contextSize.height);
+      const slotSize = slotImage.getSize();
+      const normalizedCapture = slotImage.resize({
+        width: Math.max(1, Math.round(slotSize.width * TEMPLATE_SIZE / Math.max(1, slotSize.height))),
+        height: TEMPLATE_SIZE,
+        quality: 'better',
+      });
+      const normalizedCaptureSize = normalizedCapture.getSize();
+      const normalizedCaptureBitmap = normalizedCapture.toBitmap();
+      const normalizedTypeKey = [...detectedTypes].sort().join('|');
       const bySpecies = new Map<string, { score: number; entry: ReferenceEntry }>();
       for (const reference of this.cache) {
-        const score = cosineSimilarity(descriptor, reference.descriptor) + (reference.entry.kind === 'learned' ? 0.035 : 0);
+        const referenceTypeKey = [...reference.entry.types].sort().join('|');
+        if (normalizedTypeKey && referenceTypeKey !== normalizedTypeKey) continue;
+        if (normalizedTypeKey && reference.entry.kind === 'seed' && templateSpecies.has(reference.entry.species) && !reference.template) continue;
+        const score = reference.template && normalizedTypeKey
+          ? templateSimilarityFromBgra(
+            normalizedCaptureBitmap, normalizedCaptureSize.width, normalizedCaptureSize.height,
+            reference.template.bitmap, reference.template.width, reference.template.height,
+          )
+          : cosineSimilarity(descriptor, reference.descriptor) + (reference.entry.kind === 'learned' ? 0.035 : 0);
         const current = bySpecies.get(reference.entry.species);
         if (!current || score > current.score) bySpecies.set(reference.entry.species, { score, entry: reference.entry });
       }
@@ -585,7 +753,7 @@ export class VisionReferenceStore {
           - candidateIndex * 0.04, 0.02, 0.99);
         return { species: candidate.entry.species, confidence, types: candidate.entry.types, source: candidate.entry.kind };
       });
-      return { slot: index + 1, imageDataUrl: slotImage.toDataURL(), candidates };
+      return { slot: index + 1, imageDataUrl: slotImage.toDataURL(), contextImageDataUrl: contextImage.toDataURL(), detectedTypes, candidates };
     });
   }
 }

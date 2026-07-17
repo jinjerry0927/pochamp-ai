@@ -51,7 +51,12 @@ export function mergeLocalCandidates(vision: VisionResult, localSlots: LocalVisi
       && bestLocal.source === 'learned'
       && bestLocal.confidence >= 0.9
       && bestLocal.species !== recognized?.species);
-    const species = preferLearned ? bestLocal?.species ?? null : recognized?.species ?? null;
+    const agreedCandidate = Boolean(bestLocal
+      && !recognized?.species
+      && recognized?.candidates[0] === bestLocal.species);
+    const species = preferLearned
+      ? bestLocal?.species ?? null
+      : recognized?.species ?? (agreedCandidate ? bestLocal?.species ?? null : null);
     const candidates = [...new Set([
       ...(recognized?.species ? [recognized.species] : []),
       ...(recognized?.candidates ?? []),

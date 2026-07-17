@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyzeWithNim, extractVisionJson } from './nim.js';
+import { mergeLocalCandidates } from './vision-merge.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -13,8 +14,50 @@ describe('NIM 응답 파서', () => {
     expect(parsed.opponentPreview).toEqual(['Gengar']);
   });
 
+  it('opponentPreview에 슬롯 객체가 오면 문자열 명단과 슬롯 배열로 복구한다', () => {
+    const parsed = extractVisionJson(JSON.stringify({
+      phase: 'preview',
+      confidence: 0.84,
+      opponentPreview: [
+        { slot: 1, species: 'Conkeldurr', candidates: [{ species: 'Machamp' }], confidence: 0.88, evidence: '격투 타입' },
+        { slot: 2, name: 'Barraskewda', candidates: [], confidence: 0.81, evidence: '물 타입' },
+      ],
+    }), [
+      { name: 'Conkeldurr', displayName: '노보청' },
+      { name: 'Machamp', displayName: '괴력몬' },
+      { name: 'Barraskewda', displayName: '꼬치조' },
+    ]);
+    expect(parsed.opponentPreview).toEqual(['Conkeldurr', 'Barraskewda']);
+    expect(parsed.opponentPreviewSlots).toMatchObject([
+      { slot: 1, species: 'Conkeldurr', candidates: ['Machamp'] },
+      { slot: 2, species: 'Barraskewda', candidates: [] },
+    ]);
+  });
+
   it('스키마 밖 confidence를 거부한다', () => {
     expect(() => extractVisionJson('{"phase":"unknown","confidence":2}')).toThrow();
+  });
+
+  it('첫 JSON 뒤에 추가 JSON이나 설명이 붙어도 첫 결과만 파싱한다', () => {
+    const parsed = extractVisionJson('{"phase":"preview","confidence":0.7}\n{"debug":true}');
+    expect(parsed.phase).toBe('preview');
+    expect(parsed.confidence).toBe(0.7);
+  });
+
+  it('AI 후보 1순위와 로컬 템플릿 1순위가 같으면 종을 자동 확정한다', () => {
+    const parsed = extractVisionJson(JSON.stringify({
+      phase: 'preview',
+      confidence: 0.6,
+      opponentPreview: [],
+      opponentPreviewSlots: [{ slot: 1, species: null, candidates: ['Conkeldurr'], confidence: 0.6, evidence: '격투 타입과 기둥' }],
+    }));
+    const merged = mergeLocalCandidates(parsed, [{
+      slot: 1,
+      imageDataUrl: 'data:image/png;base64,AA==',
+      candidates: [{ species: 'Conkeldurr', confidence: 0.7, types: ['Fighting'], source: 'seed' }],
+    }]);
+    expect(merged.opponentPreview).toEqual(['Conkeldurr']);
+    expect(merged.opponentPreviewSlots[0]?.species).toBe('Conkeldurr');
   });
 
   it('아이콘 슬롯 후보를 현재 규정의 영문 식별자로 정규화한다', () => {
@@ -66,7 +109,7 @@ describe('NIM 응답 파서', () => {
       expect(content.filter((entry) => entry.type === 'image_url').map((entry) => entry.image_url?.url)).toEqual(images);
       expect(body.max_tokens).toBe(900);
       expect(body.reasoning_budget).toBe(256);
-      expect(content.find((entry) => entry.type === 'text')?.text).toContain('이미지 N은 반드시 opponentPreviewSlots의 slot N에 대응');
+      expect(content.find((entry) => entry.type === 'text')?.text).toContain('image N is opponent slot N');
       return new Response(JSON.stringify({
         choices: [{ message: { content: '{"phase":"preview","confidence":0.9,"opponentPreview":[],"ownActiveSpecies":null,"opponentActiveSpecies":null,"ownHpPercent":null,"opponentHpPercent":null,"ownStatus":null,"opponentStatus":null,"visibleMoves":[],"unknownFields":[],"notes":[]}' } }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
