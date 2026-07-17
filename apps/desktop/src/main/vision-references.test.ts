@@ -1,10 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { cosineSimilarity, descriptorFromBgra, opponentSlotRect, resolvePokeApiPokemonId } from './vision-references.js';
+import { cosineSimilarity, descriptorFromBgra, detectOpponentSlotRectsFromBgra, opponentSlotRect, resolvePokeApiPokemonId } from './vision-references.js';
 
 describe('로컬 포켓몬 이미지 참조', () => {
-  it('Champions 상대 패널을 위에서 아래 여섯 슬롯으로 고정 분할한다', () => {
-    expect(opponentSlotRect({ width: 1378, height: 768 }, 1)).toEqual({ x: 1150, y: 102, width: 103, height: 82 });
-    expect(opponentSlotRect({ width: 1378, height: 768 }, 6)).toEqual({ x: 1150, y: 559, width: 103, height: 82 });
+  it('패널 검출 실패 시 Full Screen 기준 포켓몬 렌더 영역으로 분할한다', () => {
+    expect(opponentSlotRect({ width: 1378, height: 768 }, 1)).toEqual({ x: 1098, y: 122, width: 104, height: 76 });
+    expect(opponentSlotRect({ width: 1378, height: 768 }, 6)).toEqual({ x: 1098, y: 537, width: 104, height: 76 });
+  });
+
+  it('창 테두리와 작업 표시줄이 포함된 Full Screen에서도 상대 카드 여섯 줄의 포켓몬 영역을 찾는다', () => {
+    const width = 1919;
+    const height = 1075;
+    const bitmap = Buffer.alloc(width * height * 4);
+    const rows = [[172, 276], [290, 392], [406, 508], [522, 626], [638, 742], [754, 858]];
+    for (const [start = 0, end = 0] of rows) {
+      for (let y = start; y <= end; y += 1) {
+        for (let x = 1495; x <= 1769; x += 1) {
+          const offset = (y * width + x) * 4;
+          bitmap[offset] = 90;
+          bitmap[offset + 1] = 20;
+          bitmap[offset + 2] = 185;
+          bitmap[offset + 3] = 255;
+        }
+      }
+      for (let y = start + 12; y <= end - 8; y += 1) {
+        for (let x = 1550; x <= 1648; x += 1) {
+          const offset = (y * width + x) * 4;
+          bitmap[offset] = 60;
+          bitmap[offset + 1] = 160;
+          bitmap[offset + 2] = 210;
+        }
+      }
+    }
+
+    const detected = detectOpponentSlotRectsFromBgra(bitmap, width, height);
+    expect(detected).toHaveLength(6);
+    expect(detected[0]).toEqual({ x: 1530, y: 170, width: 143, height: 110 });
+    expect(detected[5]).toEqual({ x: 1530, y: 752, width: 143, height: 110 });
   });
 
   it('폼 식별자가 정확하면 National Dex보다 PokeAPI 폼 ID를 사용한다', () => {

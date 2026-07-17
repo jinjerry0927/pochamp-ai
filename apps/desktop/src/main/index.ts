@@ -2,12 +2,13 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, nativeIma
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
-import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team, type VisionResult } from '@pochamp/engine';
+import { battleStateSchema, getSpeciesBuilderOptions, localizationKo, recommendPreview, recommendTurn, regulationItems, regulationMB, regulationMBMeta, regulationSpecies, searchDex, statAlignmentOptions, teamSchema, validateTeam, type Team } from '@pochamp/engine';
 import { z } from 'zod';
 import { AppStore } from './store.js';
 import { analyzeWithNim } from './nim.js';
 import { VisionReferenceStore } from './vision-references.js';
-import type { CaptureAnalysis, CropRect, HistoryEntry, LocalVisionSlot } from '../shared/contracts.js';
+import { mergeLocalCandidates } from './vision-merge.js';
+import type { CaptureAnalysis, CropRect, HistoryEntry } from '../shared/contracts.js';
 import { UpdateManager } from './updater.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -121,28 +122,6 @@ async function captureSelectedSource(): Promise<{ duplicate: boolean; dataUrl?: 
   if (hash === lastCaptureHash) return { duplicate: true };
   lastCaptureHash = hash;
   return { duplicate: false, dataUrl: nativeImage.createFromBuffer(png).toDataURL() };
-}
-
-function mergeLocalCandidates(vision: VisionResult, localSlots: LocalVisionSlot[]): VisionResult {
-  const slots = Array.from({ length: 6 }, (_, index) => {
-    const slot = index + 1;
-    const recognized = vision.opponentPreviewSlots.find((entry) => entry.slot === slot);
-    const local = localSlots.find((entry) => entry.slot === slot);
-    const candidates = [...new Set([
-      ...(recognized?.candidates ?? []),
-      ...(local?.candidates.map((candidate) => candidate.species) ?? []),
-    ])].filter((candidate) => candidate !== recognized?.species).slice(0, 3);
-    if (!recognized && !local) return null;
-    const bestLocal = local?.candidates[0];
-    return {
-      slot,
-      species: recognized?.species ?? null,
-      candidates,
-      confidence: Math.max(recognized?.confidence ?? 0, (bestLocal?.confidence ?? 0) * 0.85),
-      evidence: recognized?.evidence || (bestLocal ? `로컬 이미지 대조 ${bestLocal.source === 'learned' ? 'Champions 학습본' : '초기 아이콘'}` : ''),
-    };
-  }).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-  return { ...vision, opponentPreviewSlots: slots };
 }
 
 function registerIpc(): void {

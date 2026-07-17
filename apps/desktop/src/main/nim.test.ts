@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { extractVisionJson } from './nim.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { analyzeWithNim, extractVisionJson } from './nim.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('NIM 응답 파서', () => {
   it('코드 펜스 안의 구조화 결과를 검증한다', () => {
@@ -30,6 +35,23 @@ describe('NIM 응답 파서', () => {
     expect(parsed.opponentPreviewSlots[1]?.species).toBeNull();
     expect(parsed.opponentPreviewSlots[1]?.candidates).toEqual(['Garchomp']);
     expect(parsed.unknownFields).toContain('상대 미리보기 2번');
+  });
+
+  it('화면 분석 제한시간 초과를 사용자가 이해할 수 있는 오류로 바꾼다', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_input: string | URL | Request, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    })));
+    const analysis = analyzeWithNim({
+      apiKey: 'test-key',
+      model: 'test-model',
+      imageDataUrl: 'data:image/png;base64,AA==',
+      allowedSpecies: [],
+      timeoutMs: 1_000,
+    });
+    const rejection = expect(analysis).rejects.toThrow('NVIDIA 화면 분석이 1초 안에 완료되지 않았습니다.');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
   });
 });
 

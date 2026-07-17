@@ -13,6 +13,7 @@ interface Props {
 const emptyPreviewSlots = (): string[] => Array.from({ length: 6 }, () => '');
 const splitSpecies = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 6);
 const splitMoves = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 4);
+const normalizeSpeciesSearch = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/[\s\-_.()]+/g, '');
 const statusOptions: Array<[BattlePokemonState['status'], string]> = [
   ['none', '정상'], ['sleep', '잠듦'], ['burn', '화상'], ['poison', '독'], ['toxic', '맹독'], ['paralysis', '마비'], ['freeze', '얼음'], ['unknown', '미확인'],
 ];
@@ -20,6 +21,7 @@ const statusOptions: Array<[BattlePokemonState['status'], string]> = [
 export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [opponentText, setOpponentText] = useState('');
   const [previewSlots, setPreviewSlots] = useState<string[]>(emptyPreviewSlots);
+  const [speciesFilter, setSpeciesFilter] = useState('');
   const [opponentActive, setOpponentActive] = useState('');
   const [ownActiveId, setOwnActiveId] = useState('');
   const [ownHp, setOwnHp] = useState(100);
@@ -59,6 +61,11 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     () => [...regulation.species].sort((a, b) => a.displayName.localeCompare(b.displayName, 'ko')),
     [regulation.species],
   );
+  const filteredSpeciesOptions = useMemo(() => {
+    const query = normalizeSpeciesSearch(speciesFilter);
+    if (!query) return speciesOptions;
+    return speciesOptions.filter((entry) => normalizeSpeciesSearch(`${entry.displayName} ${entry.name}`).includes(query));
+  }, [speciesFilter, speciesOptions]);
   const speciesName = useCallback(
     (name: string) => regulation.localization.species[name] ?? regulation.species.find((entry) => entry.name === name)?.displayName ?? name,
     [regulation],
@@ -146,7 +153,10 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
         if (autoConfirmed) setStatus(`연속 분석 상태 자동 확인 · 신뢰도 ${Math.round(result.vision.confidence * 100)}%`);
       }
       if (!result.vision && localSlots.some((slot) => slot.candidates.length)) {
-        applyPreviewSlots(localSlots.map((slot) => slot.candidates[0]?.species ?? ''), true);
+        applyPreviewSlots(localSlots.map((slot) => {
+          const best = slot.candidates[0];
+          return best?.source === 'learned' && best.confidence >= 0.9 ? best.species : '';
+        }), true);
       }
       if (!result.vision || !monitoring || result.vision.confidence < 0.82) setStatus(result.warning ?? `인식 초안 완료 · ${result.latencyMs}ms`);
     } catch (error) {
@@ -304,17 +314,38 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
 
           <div className="preview-slot-section">
             <div className="preview-slot-heading"><b>상대 팀 미리보기</b><span>아이콘 인식 결과를 슬롯별로 확인하세요.</span></div>
+            <div className="preview-search">
+              <label className="field preview-search-field">
+                <span>포켓몬 이름 검색</span>
+                <input
+                  value={speciesFilter}
+                  onChange={(event) => setSpeciesFilter(event.target.value)}
+                  placeholder="한글 또는 영문 이름"
+                />
+              </label>
+              <div className="preview-search-actions">
+                <span>{speciesFilter ? `검색 결과 ${filteredSpeciesOptions.length}개` : `전체 ${speciesOptions.length}개`}</span>
+                {speciesFilter && <button type="button" onClick={() => setSpeciesFilter('')}>검색 초기화</button>}
+              </div>
+            </div>
             <div className="preview-slot-grid">
               {previewSlots.map((value, index) => {
                 const recognized = vision?.opponentPreviewSlots.find((slot) => slot.slot === index + 1);
                 const local = localVisionSlots.find((slot) => slot.slot === index + 1);
+                const selectedOption = speciesOptions.find((entry) => entry.name === value);
+                const visibleSpeciesOptions = selectedOption && !filteredSpeciesOptions.some((entry) => entry.name === value)
+                  ? [selectedOption, ...filteredSpeciesOptions]
+                  : filteredSpeciesOptions;
                 return (
                   <label className="preview-slot" key={index}>
                     <span>슬롯 {index + 1}</span>
                     {local && <img className="preview-slot-image" src={local.imageDataUrl} alt={`상대 슬롯 ${index + 1}`} />}
-                    <select value={value} onChange={(event) => updatePreviewSlot(index, event.target.value)}>
+                    <select value={value} onChange={(event) => {
+                      updatePreviewSlot(index, event.target.value);
+                      if (event.target.value) setSpeciesFilter('');
+                    }}>
                       <option value="">미확인</option>
-                      {speciesOptions.map((entry) => <option key={entry.id} value={entry.name}>{entry.displayName}</option>)}
+                      {visibleSpeciesOptions.map((entry) => <option key={entry.id} value={entry.name}>{entry.displayName} · {entry.name}</option>)}
                     </select>
                     {recognized && (
                       <small>
@@ -339,20 +370,43 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
           {previewRecommendation && (
             <><div className="selection-ranking">{selectedOrder.map((id, index) => <div key={id}><b>{index + 1}순위</b><strong>{speciesName(team?.pokemon.find((pokemon) => pokemon.id === id)?.species ?? id)}</strong><span>{index === 0 ? '선봉' : previewRecommendation.roles[id]}</span></div>)}</div><div className="roles">{Object.entries(previewRecommendation.roles).map(([id, role]) => <div key={id}><b>{speciesName(team?.pokemon.find((pokemon) => pokemon.id === id)?.species ?? id)}</b><span>{role}</span></div>)}</div></>
           )}
-          <div className="turn-fields">
-            <label className="field"><span>현재 턴</span><input type="number" min="1" value={turn} onChange={(event) => setTurn(Math.max(1, Number(event.target.value)))} /></label>
-            <label className="field"><span>내 활성 포켓몬</span><select value={ownActiveId} onChange={(event) => setOwnActiveId(event.target.value)}>{team?.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id)).map((pokemon) => <option key={pokemon.id} value={pokemon.id}>{speciesName(pokemon.species)}</option>)}</select></label>
-            <label className="field"><span>상대 활성 포켓몬</span><input list="battle-species-list" value={opponentActive} onChange={(event) => setOpponentActive(event.target.value)} /></label>
-            <label className="field"><span>내 HP %</span><input type="number" min="0" max="100" value={ownHp} onChange={(event) => setOwnHp(Number(event.target.value))} /></label>
-            <label className="field"><span>상대 HP %</span><input type="number" min="0" max="100" value={opponentHp} onChange={(event) => setOpponentHp(Number(event.target.value))} /></label>
-            <label className="field"><span>내 상태</span><select value={ownStatus} onChange={(event) => setOwnStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="field"><span>상대 상태</span><select value={opponentStatus} onChange={(event) => setOpponentStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="check state-check"><input type="checkbox" checked={ownDrowsy} onChange={(event) => setOwnDrowsy(event.target.checked)} />내 포켓몬이 하품으로 다음 턴 잠듦</label>
-            <label className="check state-check"><input type="checkbox" checked={opponentDrowsy} onChange={(event) => setOpponentDrowsy(event.target.checked)} />상대가 하품으로 다음 턴 잠듦</label>
-            <label className="field"><span>날씨</span><select value={weather} onChange={(event) => setWeather(event.target.value as BattleState['weather'])}><option value="none">없음</option><option value="rain">비</option><option value="sun">쾌청</option><option value="sand">모래바람</option><option value="snow">설경</option><option value="unknown">미확인</option></select></label>
-            <label className="field"><span>필드</span><select value={terrain} onChange={(event) => setTerrain(event.target.value as BattleState['terrain'])}><option value="none">없음</option><option value="electric">일렉트릭</option><option value="grassy">그래스</option><option value="misty">미스트</option><option value="psychic">사이코</option><option value="unknown">미확인</option></select></label>
-            <label className="field"><span>트릭룸 남은 턴</span><input type="number" min="0" max="5" value={trickRoomTurns} onChange={(event) => setTrickRoomTurns(Math.max(0, Math.min(5, Number(event.target.value))))} /></label>
-            <label className="field"><span>상대가 공개한 기술 · 쉼표/줄바꿈</span><textarea rows={2} value={opponentMoves} onChange={(event) => setOpponentMoves(event.target.value)} placeholder={'하품\n트릭룸'} /></label>
+          <div className="turn-state-panel">
+            <div className="turn-state-heading">
+              <div><b>현재 턴 상태</b><span>양쪽 포켓몬과 필드 정보를 같은 기준으로 비교해 입력하세요.</span></div>
+              <label className="field turn-number"><span>현재 턴</span><input type="number" min="1" value={turn} onChange={(event) => setTurn(Math.max(1, Number(event.target.value)))} /></label>
+            </div>
+            <div className="combatant-grid">
+              <section className="combatant-card own">
+                <div className="combatant-title"><b>내 포켓몬</b><span>출전 포켓몬 상태</span></div>
+                <label className="field"><span>활성 포켓몬</span><select value={ownActiveId} onChange={(event) => setOwnActiveId(event.target.value)}>{team?.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id)).map((pokemon) => <option key={pokemon.id} value={pokemon.id}>{speciesName(pokemon.species)}</option>)}</select></label>
+                <div className="combatant-inline">
+                  <label className="field"><span>HP %</span><input type="number" min="0" max="100" value={ownHp} onChange={(event) => setOwnHp(Number(event.target.value))} /></label>
+                  <label className="field"><span>상태</span><select value={ownStatus} onChange={(event) => setOwnStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                </div>
+                <label className="check state-check"><input type="checkbox" checked={ownDrowsy} onChange={(event) => setOwnDrowsy(event.target.checked)} />하품으로 다음 턴 잠듦</label>
+              </section>
+              <section className="combatant-card opponent">
+                <div className="combatant-title"><b>상대 포켓몬</b><span>현재 확인된 상태</span></div>
+                <label className="field"><span>활성 포켓몬</span><input list="battle-species-list" value={opponentActive} onChange={(event) => setOpponentActive(event.target.value)} placeholder="이름 입력 또는 선택" /></label>
+                <div className="combatant-inline">
+                  <label className="field"><span>HP %</span><input type="number" min="0" max="100" value={opponentHp} onChange={(event) => setOpponentHp(Number(event.target.value))} /></label>
+                  <label className="field"><span>상태</span><select value={opponentStatus} onChange={(event) => setOpponentStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                </div>
+                <label className="check state-check"><input type="checkbox" checked={opponentDrowsy} onChange={(event) => setOpponentDrowsy(event.target.checked)} />하품으로 다음 턴 잠듦</label>
+              </section>
+            </div>
+            <section className="turn-field-group">
+              <div className="turn-group-heading"><b>필드 효과</b><span>양쪽에 공통으로 적용되는 전장 상태</span></div>
+              <div className="field-effect-grid">
+                <label className="field"><span>날씨</span><select value={weather} onChange={(event) => setWeather(event.target.value as BattleState['weather'])}><option value="none">없음</option><option value="rain">비</option><option value="sun">쾌청</option><option value="sand">모래바람</option><option value="snow">설경</option><option value="unknown">미확인</option></select></label>
+                <label className="field"><span>필드</span><select value={terrain} onChange={(event) => setTerrain(event.target.value as BattleState['terrain'])}><option value="none">없음</option><option value="electric">일렉트릭</option><option value="grassy">그래스</option><option value="misty">미스트</option><option value="psychic">사이코</option><option value="unknown">미확인</option></select></label>
+                <label className="field"><span>트릭룸 남은 턴</span><input type="number" min="0" max="5" value={trickRoomTurns} onChange={(event) => setTrickRoomTurns(Math.max(0, Math.min(5, Number(event.target.value))))} /></label>
+              </div>
+            </section>
+            <section className="turn-field-group">
+              <div className="turn-group-heading"><b>상대가 공개한 기술</b><span>쉼표 또는 줄바꿈으로 최대 4개</span></div>
+              <label className="field"><textarea rows={2} value={opponentMoves} onChange={(event) => setOpponentMoves(event.target.value)} placeholder={'하품\n트릭룸'} /></label>
+            </section>
           </div>
           <button className="primary full" disabled={!team || busy || !opponentActive} onClick={runTurn}>현재 상태로 행동 1~3순위 추천</button>
         </div>

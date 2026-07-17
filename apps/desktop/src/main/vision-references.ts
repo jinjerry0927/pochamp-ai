@@ -55,6 +55,7 @@ interface ReferenceEntry {
   id: string;
   species: string;
   kind: 'seed' | 'learned';
+  cropRevision?: number;
   file: string;
   createdAt: string;
   types: string[];
@@ -80,6 +81,7 @@ export interface PokeApiPokemonRow {
 const GRID_SIZE = 16;
 const MAX_LEARNED_PER_SPECIES = 20;
 const SEED_REVISION = 2;
+const CROP_REVISION = 2;
 const POKEAPI_CSV = 'https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv';
 const SPRITE_ROOT = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
 const TYPE_NAMES: Record<number, string> = {
@@ -90,17 +92,109 @@ const TYPE_NAMES: Record<number, string> = {
 const toID = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 const safeName = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'pokemon';
 const clamp = (value: number, minimum = 0, maximum = 1): number => Math.max(minimum, Math.min(maximum, value));
+const isCurrentReference = (entry: ReferenceEntry): boolean => entry.kind === 'seed' || entry.cropRevision === CROP_REVISION;
 
-export function opponentSlotRect(size: { width: number; height: number }, slot: number): { x: number; y: number; width: number; height: number } {
+export interface ImageRect { x: number; y: number; width: number; height: number }
+
+function fallbackOpponentSlotRect(size: { width: number; height: number }, slot: number): ImageRect {
   const index = Math.max(0, Math.min(5, slot - 1));
-  const x = Math.floor(size.width * 0.835);
-  const y = Math.floor(size.height * (0.133 + index * 0.119));
+  const x = Math.floor(size.width * 0.797);
+  const y = Math.floor(size.height * (0.16 + index * 0.108));
   return {
     x,
     y,
-    width: Math.max(1, Math.min(size.width - x, Math.floor(size.width * 0.075))),
-    height: Math.max(1, Math.min(size.height - y, Math.floor(size.height * 0.108))),
+    width: Math.max(1, Math.min(size.width - x, Math.floor(size.width * 0.076))),
+    height: Math.max(1, Math.min(size.height - y, Math.floor(size.height * 0.1))),
   };
+}
+
+export function opponentSlotRect(size: { width: number; height: number }, slot: number): ImageRect {
+  return fallbackOpponentSlotRect(size, slot);
+}
+
+function isOpponentPanelPixel(bitmap: Buffer, offset: number): boolean {
+  const blue = bitmap[offset] ?? 0;
+  const green = bitmap[offset + 1] ?? 0;
+  const red = bitmap[offset + 2] ?? 0;
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  const pixelSaturation = maximum ? (maximum - minimum) / maximum : 0;
+  return red > 70
+    && pixelSaturation > 0.42
+    && red > green * 1.45
+    && blue > green * 1.15;
+}
+
+/**
+ * Champions의 상대 팀 카드는 반투명 적색/자홍색 패널 여섯 개로 표시된다.
+ * 창 제목줄·검은 여백·작업 표시줄이 캡처에 포함돼도 패널 자체를 먼저 찾은 뒤,
+ * 각 카드의 왼쪽 포켓몬 렌더 영역만 반환한다.
+ */
+export function detectOpponentSlotRectsFromBgra(bitmap: Buffer, width: number, height: number): ImageRect[] {
+  if (width < 320 || height < 240 || bitmap.length < width * height * 4) return [];
+  const xStart = Math.floor(width * 0.62);
+  const xEnd = Math.min(width, Math.ceil(width * 0.96));
+  const sampleStep = width >= 1000 ? 2 : 1;
+  const rowThreshold = Math.max(12, Math.floor(((xEnd - xStart) / sampleStep) * 0.1));
+  const activeRows: number[] = [];
+
+  for (let y = 0; y < height; y += sampleStep) {
+    let count = 0;
+    for (let x = xStart; x < xEnd; x += sampleStep) {
+      if (isOpponentPanelPixel(bitmap, (y * width + x) * 4)) count += 1;
+    }
+    if (count >= rowThreshold) activeRows.push(y);
+  }
+
+  const rowRuns: Array<{ start: number; end: number }> = [];
+  for (const y of activeRows) {
+    const current = rowRuns.at(-1);
+    if (!current || y - current.end > sampleStep) rowRuns.push({ start: y, end: y });
+    else current.end = y;
+  }
+
+  const cards = rowRuns
+    .map((run) => ({ ...run, height: run.end - run.start + sampleStep }))
+    .filter((run) => run.start >= height * 0.08
+      && run.end <= height * 0.9
+      && run.height >= height * 0.065
+      && run.height <= height * 0.14)
+    .map((run): ImageRect | null => {
+      const columnThreshold = Math.max(4, Math.floor((run.height / sampleStep) * 0.12));
+      const activeColumns: number[] = [];
+      for (let x = xStart; x < xEnd; x += sampleStep) {
+        let count = 0;
+        for (let y = run.start; y <= run.end; y += sampleStep) {
+          if (isOpponentPanelPixel(bitmap, (y * width + x) * 4)) count += 1;
+        }
+        if (count >= columnThreshold) activeColumns.push(x);
+      }
+      if (!activeColumns.length) return null;
+      const panelLeft = activeColumns[0] ?? 0;
+      const panelRight = Math.min(width, (activeColumns.at(-1) ?? panelLeft) + sampleStep);
+      const panelWidth = panelRight - panelLeft;
+      if (panelWidth < width * 0.1 || panelWidth > width * 0.22) return null;
+      const x = Math.max(0, Math.floor(panelLeft + panelWidth * 0.13));
+      const y = Math.max(0, run.start - sampleStep);
+      return {
+        x,
+        y,
+        width: Math.max(1, Math.min(width - x, Math.floor(panelWidth * 0.52))),
+        height: Math.max(1, Math.min(height - y, run.height + sampleStep * 2)),
+      };
+    })
+    .filter((rect): rect is ImageRect => Boolean(rect))
+    .sort((left, right) => left.y - right.y);
+
+  return cards.length === 6 ? cards : [];
+}
+
+function opponentSlotRects(image: NativeImageLike): ImageRect[] {
+  const size = image.getSize();
+  const detected = detectOpponentSlotRectsFromBgra(image.toBitmap(), size.width, size.height);
+  return detected.length === 6
+    ? detected
+    : Array.from({ length: 6 }, (_, index) => fallbackOpponentSlotRect(size, index + 1));
 }
 
 export function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
@@ -307,7 +401,7 @@ export class VisionReferenceStore {
   }
 
   private async reloadCache(): Promise<void> {
-    const loaded = await Promise.all(this.manifest.entries.map(async (entry): Promise<CachedReference | null> => {
+    const loaded = await Promise.all(this.manifest.entries.filter(isCurrentReference).map(async (entry): Promise<CachedReference | null> => {
       try {
         const image = this.images.createFromBuffer(await readFile(join(this.root, entry.file)));
         if (image.isEmpty()) return null;
@@ -326,12 +420,13 @@ export class VisionReferenceStore {
   async status(): Promise<VisionReferenceStatus> {
     await this.initialize();
     const seeded = new Set(this.manifest.entries.filter((entry) => entry.kind === 'seed').map((entry) => entry.species));
-    const learned = new Set(this.manifest.entries.filter((entry) => entry.kind === 'learned').map((entry) => entry.species));
+    const currentEntries = this.manifest.entries.filter(isCurrentReference);
+    const learned = new Set(currentEntries.filter((entry) => entry.kind === 'learned').map((entry) => entry.species));
     return {
       totalSpecies: this.allowed.size,
       seededSpecies: seeded.size,
       learnedSpecies: learned.size,
-      referenceCount: this.manifest.entries.length,
+      referenceCount: currentEntries.length,
       missingSpecies: Math.max(0, this.allowed.size - seeded.size),
       seedCurrent: this.manifest.seedRevision >= SEED_REVISION,
     };
@@ -392,7 +487,7 @@ export class VisionReferenceStore {
     for (const sample of samples) {
       const species = this.allowed.get(sample.species);
       if (!species || !/^data:image\/png;base64,/i.test(sample.imageDataUrl) || sample.imageDataUrl.length > 2_000_000) continue;
-      const currentCount = this.manifest.entries.filter((entry) => entry.kind === 'learned' && entry.species === sample.species).length;
+      const currentCount = this.manifest.entries.filter((entry) => entry.kind === 'learned' && entry.cropRevision === CROP_REVISION && entry.species === sample.species).length;
       if (currentCount >= MAX_LEARNED_PER_SPECIES) continue;
       const image = this.images.createFromDataURL(sample.imageDataUrl);
       if (image.isEmpty()) continue;
@@ -400,7 +495,7 @@ export class VisionReferenceStore {
       const file = join('learned', `${safeName(sample.species)}-${id}.png`);
       await writeFile(join(this.root, file), image.toPNG());
       const seed = this.manifest.entries.find((entry) => entry.species === sample.species && entry.kind === 'seed');
-      this.manifest.entries.push({ id, species: sample.species, kind: 'learned', file, createdAt: new Date().toISOString(), types: seed?.types ?? [] });
+      this.manifest.entries.push({ id, species: sample.species, kind: 'learned', cropRevision: CROP_REVISION, file, createdAt: new Date().toISOString(), types: seed?.types ?? [] });
     }
     await this.saveManifest();
     await this.reloadCache();
@@ -410,9 +505,9 @@ export class VisionReferenceStore {
   async matchPreview(image: NativeImageLike): Promise<LocalVisionSlot[]> {
     await this.initialize();
     if (image.isEmpty()) return [];
-    const size = image.getSize();
+    const rects = opponentSlotRects(image);
     return Array.from({ length: 6 }, (_, index): LocalVisionSlot => {
-      const slotImage = image.crop(opponentSlotRect(size, index + 1));
+      const slotImage = image.crop(rects[index] ?? opponentSlotRect(image.getSize(), index + 1));
       const descriptor = descriptorFromImage(slotImage, 'capture');
       const bySpecies = new Map<string, { score: number; entry: ReferenceEntry }>();
       for (const reference of this.cache) {

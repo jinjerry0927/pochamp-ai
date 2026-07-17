@@ -54,7 +54,8 @@ export async function analyzeWithNim(args: {
   timeoutMs?: number;
 }): Promise<VisionResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), args.timeoutMs ?? 12_000);
+  const timeoutMs = args.timeoutMs ?? 25_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const allowed = args.allowedSpecies.map((entry) => `${entry.displayName} (${entry.name})`).join(', ');
   const localCandidates = args.localVisionSlots?.map((slot) => {
     const candidates = slot.candidates.map((candidate) => `${candidate.species}[${candidate.types.join('/') || '타입 미확인'}] ${Math.round(candidate.confidence * 100)}% ${candidate.source === 'learned' ? 'Champions 학습 이미지' : '초기 아이콘'}`);
@@ -113,6 +114,11 @@ ${localCandidates}
     const rawContent = payload.choices?.[0]?.message?.content;
     const content = typeof rawContent === 'string' ? rawContent : rawContent?.map((part) => part.text ?? '').join('') ?? '';
     return extractVisionJson(content, args.allowedSpecies);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`NVIDIA 화면 분석이 ${Math.round(timeoutMs / 1000)}초 안에 완료되지 않았습니다.`);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

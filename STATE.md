@@ -2,6 +2,10 @@
 
 ## Last Run
 
+- 2026-07-17: 상대 팀 미리보기에 한글·영문 검색 필터를 추가하고, 현재 턴 입력을 내 포켓몬/상대 포켓몬/필드 효과/공개 기술 비교 박스로 재배치했다. 기본 창 폭에서는 배틀 입력과 추천을 한 열로 전환해 양쪽 상태 카드의 너비를 확보했다.
+- 2026-07-17: Full-screen preview recognition now detects the six red opponent cards before cropping the Pokemon render area. The supplied 1919x1075 frame, a 1440px resize, and a taskbar-free window variant all resolve Kingambit/Aegislash/Gardevoir/Torkoal/Garchomp/Archaludon at 0.99 after crop-revision-2 learning.
+- 2026-07-17: Stale learned crops are retained on disk but excluded from matching; low-confidence seed-only matches no longer auto-fill team slots, and high-confidence current learned crops can override a conflicting NIM guess.
+
 - 2026-07-17: 사용자 테스트 배포를 위해 기능 PR에 `0.5.0` 버전과 릴리스 노트를 반영하고 태그 기반 Windows 배포를 준비.
 - 2026-07-17: Champions 상대 선택 화면 이미지 참조팩과 사용자 확정 학습 루프를 `very-high / goal-handoff`로 구현·검증.
 - M-B 235종 중 184종은 9세대 선택 화면 아이콘, 48종은 8세대 아이콘, 나머지는 HOME/공식 이미지 폴백으로 로컬 저장. 첨부 샘플 6종을 확정 학습한 뒤 6/6 모두 로컬 1순위(신뢰도 0.99)를 확인.
@@ -36,6 +40,10 @@
 - 0.4.0 NSIS 설치 파일, blockmap, `latest.yml` 생성과 SHA-512 검증을 완료했다. 설치 파일은 아직 코드 서명되지 않았다.
 
 ## Verification
+
+- UI checker pass: 개발 빌드에서 한글 검색, 영문 검색, 선택 후 검색 초기화, 다른 검색 중 기존 슬롯값 유지, 양쪽 활성 포켓몬/HP/상태의 같은 행 정렬을 직접 확인했다. 데스크톱 타입 검사, 데스크톱 11개 테스트, 엔진 15개 테스트, Electron 빌드가 통과했다.
+- Full-screen vision regression: synthetic panel geometry test plus direct Electron nativeImage validation against the user-supplied frame. All three scale/window variants detected six slots and matched 6/6 after learning.
+- Checker pass: 15 engine + 11 desktop tests, root typecheck, benchmark, security audit, Windows package verification, and packaged ASAR source/hash checks passed.
 
 - 이미지 참조팩: 패키지 앱 UI에서 235/235종·최신, 매니페스트 v2/seed revision 2, 참조 235장(9세대 184장) 확인.
 - 첨부 샘플: 학습 전 로컬 Top-3 4/6, 확정 학습 후 라이츄/나인테일-알로라/한카리아스/엘풍/어흥염/리자몽 6/6이 1순위·신뢰도 0.99. 앱 재시작 후 `Champions 학습 6종 · 총 241장` 확인.
