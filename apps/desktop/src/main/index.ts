@@ -49,10 +49,13 @@ const turnInputSchema = z.object({
 }).strict();
 const historyEntrySchema = z.object({
   id: shortIdSchema,
+  gameId: shortIdSchema.optional(),
   createdAt: z.string().datetime(),
   kind: z.enum(['preview', 'turn', 'match']),
   teamName: z.string().max(200),
   opponent: z.array(z.string().max(100)).max(6),
+  turn: z.number().int().min(0).optional(),
+  battleState: battleStateSchema.optional(),
   recommendation: z.unknown().optional(),
   accepted: z.boolean().optional(),
   actualAction: z.string().max(500).optional(),

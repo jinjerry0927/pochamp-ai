@@ -43,6 +43,14 @@ export function App() {
   }, []);
 
   const selectedTeam = useMemo(() => teams.find((team) => team.id === selectedTeamId) ?? null, [teams, selectedTeamId]);
+  const historyGames = useMemo(() => {
+    const grouped = new Map<string, HistoryEntry[]>();
+    for (const entry of history) {
+      const key = entry.gameId ?? 'legacy-history';
+      grouped.set(key, [...(grouped.get(key) ?? []), entry]);
+    }
+    return [...grouped.entries()].map(([id, entries]) => ({ id, entries }));
+  }, [history]);
 
   const saveTeam = async () => {
     const draft = { ...editingTeam, updatedAt: new Date().toISOString() };
@@ -99,8 +107,18 @@ export function App() {
         </section>}
         {tab === 'teams' && <section className="page-stack"><div className="section-heading"><div><span className="eyebrow">검증·저장 완료</span><h2>내 팀</h2></div><button className="primary" onClick={createTeam}>새 팀 제작</button></div>{teams.length ? <div className="team-library">{teams.map((team) => { const summary = summarizeTeam(team); return <article className={team.id === selectedTeamId ? 'team-summary-card active' : 'team-summary-card'} key={team.id}><div className="team-summary-head"><div><span>{team.id === selectedTeamId ? '활성 팀' : '저장 팀'}</span><h3>{team.name}</h3></div><small>{new Date(team.updatedAt).toLocaleDateString('ko-KR')}</small></div><div className="team-roster">{team.pokemon.map((pokemon, index) => <span key={pokemon.id}><b>{index + 1}</b>{localizeName('species', pokemon.species)}</span>)}</div><div className="ai-summary"><b>AI TEAM SUMMARY · 로컬 전략 엔진</b><strong>{summary.identity}</strong><p>{summary.plan}</p><small>주의 · {summary.caution}</small></div><div className="team-actions"><button className="primary" onClick={() => chooseActiveTeam(team.id)}>활성 팀으로 사용</button><button onClick={() => loadTeam(team)}>팀 제작에서 수정</button></div></article>; })}</div> : <div className="empty-list">검증·저장된 팀이 없습니다. ‘새 팀 제작’에서 첫 팀을 만드세요.</div>}</section>}
         {tab === 'builder' && <TeamEditor team={editingTeam} savedTeams={teams} regulation={bootstrap.regulation} validation={validation} onChange={setEditingTeam} onLoad={loadTeam} onNew={createTeam} onSave={saveTeam} />}
-        {tab === 'battle' && <><datalist id="battle-species-list">{bootstrap.regulation.species.map((entry) => <option key={entry.id} value={entry.displayName}>{entry.name}</option>)}</datalist><BattleAssistant team={selectedTeam} regulation={bootstrap.regulation} onHistory={setHistory} /></>}
-        {tab === 'history' && <section className="page-stack"><div className="section-heading"><div><span className="eyebrow">로컬 실험 로그</span><h2>추천 기록</h2></div></div><div className="history-list">{history.length ? history.map((entry) => <article key={entry.id}><div><b>{entry.kind === 'preview' ? '선출' : entry.kind === 'turn' ? '턴' : '경기'} · {entry.teamName}</b><span>{new Date(entry.createdAt).toLocaleString('ko-KR')}</span></div><strong>{entry.recommendation?.primaryAction.label ?? entry.result ?? '기록'}</strong><em>{entry.recommendation ? `${entry.recommendation.simulatedWinRate}%` : ''}</em></article>) : <div className="empty-list">아직 기록이 없습니다.</div>}</div></section>}
+        {tab === 'battle' && <BattleAssistant team={selectedTeam} regulation={bootstrap.regulation} onHistory={setHistory} />}
+        {tab === 'history' && <section className="page-stack"><div className="section-heading"><div><span className="eyebrow">경기별 상태·추천 로그</span><h2>배틀 기록</h2></div></div><div className="history-games">{historyGames.length ? historyGames.map((game, index) => {
+          const newest = game.entries[0]!;
+          const opponents = newest.opponent.map((species) => localizeName('species', species)).join(' · ');
+          return <details className="history-game" key={game.id} open={index === 0}><summary><div><b>[{historyGames.length - index}게임] {newest.teamName}</b><span>{opponents || '상대 팀 미기록'}</span></div><em>{game.entries.length}개 로그 · {new Date(newest.createdAt).toLocaleString('ko-KR')}</em></summary><div className="history-log-list">{[...game.entries].reverse().map((entry) => {
+            const state = entry.battleState;
+            const stateLabel = state?.ownActive && state.opponentActive
+              ? `턴 ${state.turn} · ${localizeName('species', state.ownActive.species)} ${state.ownActive.currentHp}/${state.ownActive.maxHp} ↔ ${localizeName('species', state.opponentActive.species)} ${state.opponentActive.currentHp}/${state.opponentActive.maxHp}${state.trickRoomTurns > 0 ? ` · 트릭룸 ${state.trickRoomTurns}턴` : ''}`
+              : entry.kind === 'preview' ? '출전 3마리·선봉 추천' : '경기 기록';
+            return <article key={entry.id}><div><b>{stateLabel}</b><span>{new Date(entry.createdAt).toLocaleTimeString('ko-KR')}</span></div><strong>{entry.recommendation?.primaryAction.label ?? entry.result ?? '기록'}</strong><em>{entry.recommendation ? `${entry.recommendation.simulatedWinRate}%` : ''}</em></article>;
+          })}</div></details>;
+        }) : <div className="empty-list">아직 기록이 없습니다.</div>}</div></section>}
         {tab === 'settings' && <SettingsPanel settings={settings} onSettings={setSettings} />}
       </main>
     </div>

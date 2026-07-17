@@ -82,6 +82,18 @@ export function archetypeSelectionBonus(members: readonly TeamPokemon[], detecte
   }, 0);
 }
 
+export function archetypeLeadBonus(lead: TeamPokemon, members: readonly TeamPokemon[], detected: readonly TeamArchetype[]): number {
+  const selected = new Set(members.map((pokemon) => pokemon.species));
+  return detected.reduce((total, archetype) => {
+    const hasSetter = archetype.setters.some((name) => selected.has(name));
+    const hasAbuser = archetype.abusers.some((name) => selected.has(name));
+    if (!hasSetter || !hasAbuser) return total;
+    if (archetype.setters.includes(lead.species)) return total + (archetype.confidence === 'high' ? 0.24 : 0.14);
+    if (archetype.abusers.includes(lead.species)) return total - 0.035;
+    return total - 0.06;
+  }, 0);
+}
+
 export function describeArchetype(side: '내 팀' | '상대 팀', archetype: TeamArchetype): string {
   const confidence = archetype.confidence === 'high' ? '높은 확률' : '가능성';
   return `${side}: ${archetype.evidence.join(' + ')} 조합으로 ${archetype.name} ${confidence}`;

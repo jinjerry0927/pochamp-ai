@@ -1,8 +1,9 @@
 import { getMove, getSpecies, localizeName, neutralLevel50Stats, typeMultiplier } from './dex.js';
-import { archetypeSelectionBonus, describeArchetype, detectTeamArchetypes } from './meta.js';
+import { archetypeLeadBonus, archetypeSelectionBonus, describeArchetype, detectTeamArchetypes } from './meta.js';
 import { battleStateSchema, teamSchema, type ActionEvaluation, type BattleState, type PreviewInput, type PreviewRecommendation, type Recommendation, type StatBlock, type TeamPokemon, type TurnInput } from './types.js';
 
-const STATE_VERSION = 'm-b@2026-07-16/heuristic-rollout-v1';
+const STATE_VERSION = 'm-b@2026-07-17/battle-policy-v2';
+const PIVOT_MOVE_IDS = new Set(['uturn', 'voltswitch', 'flipturn', 'partingshot', 'chillyreception', 'teleport']);
 
 class SeededRandom {
   constructor(private state: number) {}
@@ -19,7 +20,13 @@ function stageMultiplier(stage: number): number {
   return stage >= 0 ? (2 + stage) / 2 : 2 / (2 - stage);
 }
 
-function estimateDamagePercent(attacker: TeamPokemon, defenderName: string, moveName: string, random = 0.925): number {
+function weatherMultiplier(moveType: string, weather: BattleState['weather'] = 'none'): number {
+  if (weather === 'rain') return moveType === 'Water' ? 1.5 : moveType === 'Fire' ? 0.5 : 1;
+  if (weather === 'sun') return moveType === 'Fire' ? 1.5 : moveType === 'Water' ? 0.5 : 1;
+  return 1;
+}
+
+function estimateDamagePercent(attacker: TeamPokemon, defenderName: string, moveName: string, random = 0.925, weather: BattleState['weather'] = 'none'): number {
   const move = getMove(moveName);
   const attackerSpecies = getSpecies(attacker.species);
   const defenderStats = neutralLevel50Stats(defenderName);
@@ -29,7 +36,7 @@ function estimateDamagePercent(attacker: TeamPokemon, defenderName: string, move
   const defense = move.category === 'Physical' ? defenderStats.defense : defenderStats.specialDefense;
   const stab = attackerSpecies.types.includes(move.type) ? 1.5 : 1;
   const effectiveness = typeMultiplier(move.type, defenderName);
-  const raw = (((22 * Math.max(move.power, 1) * attack) / Math.max(defense, 1)) / 50 + 2) * stab * effectiveness * random;
+  const raw = (((22 * Math.max(move.power, 1) * attack) / Math.max(defense, 1)) / 50 + 2) * stab * effectiveness * weatherMultiplier(move.type, weather) * random;
   return clamp(raw / defenderStats.hp, 0, 2);
 }
 
@@ -38,7 +45,8 @@ function genericOpponentDamage(defender: TeamPokemon, opponentName: string, rand
   if (!opponent) return 0.18;
   const attack = Math.max(opponent.baseStats.attack, opponent.baseStats.specialAttack) * 2 + 5;
   const defense = opponent.baseStats.attack >= opponent.baseStats.specialAttack ? defender.stats.defense : defender.stats.specialDefense;
-  const multiplier = Math.max(...opponent.types.map((type) => typeMultiplier(type, defender.species)), 1);
+  const stabMultipliers = opponent.types.map((type) => typeMultiplier(type, defender.species));
+  const multiplier = stabMultipliers.length ? Math.max(...stabMultipliers) : 1;
   const raw = (((22 * 80 * attack) / Math.max(defense, 1)) / 50 + 2) * 1.5 * multiplier * random;
   return clamp(raw / defender.stats.hp, 0, 2);
 }
@@ -118,7 +126,9 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
       }, 0) / option.members.length;
       total += leadScore * 0.55 + rosterScore * 0.45;
     }
-    const score = total / opponentOptions.length + archetypeSelectionBonus(option.members, ownArchetypes);
+    const score = total / opponentOptions.length
+      + archetypeSelectionBonus(option.members, ownArchetypes)
+      + archetypeLeadBonus(option.lead, option.members, ownArchetypes);
     const rate = sigmoid(score * 2.4);
     return { option, score, rate };
   }).sort((a, b) => b.score - a.score);
@@ -139,6 +149,9 @@ export function recommendPreview(input: PreviewInput): PreviewRecommendation {
       action.label = `${localizeName('species', option.lead.species)} 선봉 · ${option.members.map((member) => localizeName('species', member.species)).join(' / ')}`;
       const selectedArchetypes = detectTeamArchetypes(option.members.map((member) => member.species));
       action.reasons.unshift(...selectedArchetypes.map((archetype) => `${archetype.name} 코어를 함께 선출`));
+      action.reasons.unshift(...selectedArchetypes
+        .filter((archetype) => archetype.setters.includes(option.lead.species))
+        .map((archetype) => `${localizeName('species', option.lead.species)} 선봉으로 ${archetype.name} 전개 시작`));
       action.risks.unshift(...opponentArchetypes.map((archetype) => `${archetype.name} 전개를 막지 못하면 상성 평가가 악화될 수 있음`));
     }
   });
@@ -194,6 +207,7 @@ function evaluateMove(
   ownHpRatio: number,
   opponentHpRatio: number,
   state: BattleState,
+  pivotTarget?: { pokemon: TeamPokemon; state: BattleState['ownBench'][number] },
 ): ActionEvaluation {
   const move = getMove(moveName);
   if (!move) throw new Error(`기술을 찾을 수 없습니다: ${moveName}`);
@@ -205,33 +219,48 @@ function evaluateMove(
   const cannotNormallyAct = (ownStatus === 'sleep' && move.id !== 'sleeptalk') || ownStatus === 'freeze';
   const stayingWhileDrowsy = state.ownActive?.volatileStatuses?.includes('drowsy') ?? false;
   const utility = move.category === 'Status' ? statusMoveUtility(move.id, state, ownHpRatio, attacker) : 0;
+  const isPivot = PIVOT_MOVE_IDS.has(move.id) && Boolean(pivotTarget);
+  const pivotUtility = isPivot && pivotTarget
+    ? clamp((matchupScore(pivotTarget.pokemon, defenderName) - matchupScore(attacker, defenderName)) * 0.08, -0.02, 0.08) + 0.035
+    : 0;
   for (let rollout = 0; rollout < rolloutCount; rollout += 1) {
     let ownHp = ownHpRatio;
     let opponentHp = opponentHpRatio;
+    let currentAttacker = attacker;
     for (let turn = 0; turn < 3; turn += 1) {
-      const selected = turn === 0 ? moveName : bestDamage(attacker, defenderName).move;
+      const selected = turn === 0 ? moveName : bestDamage(currentAttacker, defenderName).move;
       const selectedMove = getMove(selected);
       const blocked = turn === 0 && cannotNormallyAct;
       const hit = !blocked && selectedMove ? rng.next() * 100 <= selectedMove.accuracy : false;
       const burnMultiplier = ownStatus === 'burn' && selectedMove?.category === 'Physical' ? 0.5 : 1;
-      const dealt = hit ? estimateDamagePercent(attacker, defenderName, selected, 0.85 + rng.next() * 0.15) * burnMultiplier : 0;
+      const dealt = hit ? estimateDamagePercent(currentAttacker, defenderName, selected, 0.85 + rng.next() * 0.15, state.weather) * burnMultiplier : 0;
       const opponentActionMultiplier = opponentStatus === 'sleep' || opponentStatus === 'freeze' ? 0.25 : 1;
-      const received = genericOpponentDamage(attacker, defenderName, 0.85 + rng.next() * 0.15) * opponentActionMultiplier;
+      const received = genericOpponentDamage(currentAttacker, defenderName, 0.85 + rng.next() * 0.15) * opponentActionMultiplier;
       const defender = getSpecies(defenderName);
-      const ownSpeed = attacker.stats.speed * (ownStatus === 'paralysis' ? 0.5 : 1);
+      const ownSpeed = currentAttacker.stats.speed * (ownStatus === 'paralysis' ? 0.5 : 1);
       const opponentSpeed = ((defender?.baseStats.speed ?? 50) * 2 + 5) * (opponentStatus === 'paralysis' ? 0.5 : 1);
       const priority = selectedMove?.priority ?? 0;
       const goFirst = priority !== 0 ? priority > 0 : state.trickRoomTurns > 0 ? ownSpeed <= opponentSpeed : ownSpeed >= opponentSpeed;
       if (goFirst) {
         opponentHp -= dealt;
-        if (opponentHp > 0) ownHp -= received;
+        if (isPivot && turn === 0 && hit && opponentHp > 0 && pivotTarget) {
+          currentAttacker = pivotTarget.pokemon;
+          ownHp = clamp(pivotTarget.state.currentHp / pivotTarget.state.maxHp)
+            - genericOpponentDamage(currentAttacker, defenderName, 0.85 + rng.next() * 0.15) * opponentActionMultiplier;
+        } else if (opponentHp > 0) ownHp -= received;
       } else {
         ownHp -= received;
-        if (ownHp > 0) opponentHp -= dealt;
+        if (ownHp > 0) {
+          opponentHp -= dealt;
+          if (isPivot && turn === 0 && hit && pivotTarget) {
+            currentAttacker = pivotTarget.pokemon;
+            ownHp = clamp(pivotTarget.state.currentHp / pivotTarget.state.maxHp);
+          }
+        }
       }
       if (ownHp <= 0 || opponentHp <= 0) break;
     }
-    const score = clamp(0.5 + (ownHp - opponentHp) * 0.35 + utility - (stayingWhileDrowsy ? 0.16 : 0));
+    const score = clamp(0.5 + (ownHp - opponentHp) * 0.35 + utility + pivotUtility - (stayingWhileDrowsy ? 0.16 : 0));
     scoreTotal += score;
     if (score >= 0.55) favorable += 1;
   }
@@ -240,25 +269,30 @@ function evaluateMove(
   return {
     kind: 'move',
     id: move.id,
-    label: localizeName('move', move.name),
+    label: isPivot && pivotTarget
+      ? `${localizeName('move', move.name)} → ${localizeName('species', pivotTarget.pokemon.species)} 교체`
+      : localizeName('move', move.name),
     simulatedWinRate: Math.round(rate * 1000) / 10,
     score: rate,
     outcome: asOutcome(rate),
     reasons: [
+      ...(isPivot && pivotTarget ? [`공격 후 ${localizeName('species', pivotTarget.pokemon.species)}로 이어 주도권 유지`] : []),
       cannotNormallyAct ? `${ownStatus === 'sleep' ? '수면' : '얼음'} 상태의 행동 실패 위험 반영` : effectiveness > 1 ? `상성 배율 ${effectiveness}배` : '3턴 공통 시드 롤아웃 비교',
       state.trickRoomTurns > 0 ? `트릭룸 ${state.trickRoomTurns}턴 남음 · 느린 쪽 선공 반영` : `${favorable}/${rolloutCount}회 유리한 전개`,
     ],
     risks: move.category === 'Status' ? ['상태 기술은 확인된 주요 효과와 일반 효용값을 함께 평가'] : [],
+    pivotTargetPokemonId: isPivot ? pivotTarget?.pokemon.id : undefined,
   };
 }
 
-function evaluateSwitch(target: TeamPokemon, opponentName: string, rolloutCount: number, hpRatio: number, urgentExit: boolean): ActionEvaluation {
+function evaluateSwitch(target: TeamPokemon, opponentName: string, rolloutCount: number, hpRatio: number, urgentExit: boolean, forced: boolean): ActionEvaluation {
   const rng = new SeededRandom(0x51_17_2026 ^ target.id.length);
   let scoreTotal = 0;
   for (let rollout = 0; rollout < rolloutCount; rollout += 1) {
     const entryDamage = genericOpponentDamage(target, opponentName, 0.85 + rng.next() * 0.15);
     const pressure = bestDamage(target, opponentName).damage;
-    scoreTotal += clamp(0.5 + (pressure - entryDamage) * 0.4 + (hpRatio - 1) * 0.35 + (urgentExit ? 0.18 : 0));
+    const tempoPenalty = forced ? 0 : urgentExit ? 0.02 : 0.14;
+    scoreTotal += clamp(0.5 + (pressure - entryDamage) * 0.4 + (hpRatio - 1) * 0.35 + (urgentExit ? 0.2 : 0) - tempoPenalty);
   }
   const rate = scoreTotal / rolloutCount;
   return {
@@ -269,7 +303,7 @@ function evaluateSwitch(target: TeamPokemon, opponentName: string, rolloutCount:
     score: rate,
     outcome: asOutcome(rate),
     reasons: [urgentExit ? '수면·얼음·하품 대기 상태를 해제하는 교체 가치 반영' : '교체 직후 예상 피격과 다음 턴 압박을 함께 평가'],
-    risks: ['교체를 읽은 상대 행동은 일반적인 공격 분포로 가정'],
+    risks: [forced ? '교체 후 상대와의 상성을 우선 평가' : '공격 기회를 포기하고 상대에게 한 턴을 내주는 비용 반영'],
   };
 }
 
@@ -285,19 +319,26 @@ export function recommendTurn(input: TurnInput): Recommendation {
   const canUseMoves = state.phase !== 'forced-switch' && !state.ownActive.fainted && state.ownActive.currentHp > 0;
   const ownHpRatio = clamp(state.ownActive.currentHp / state.ownActive.maxHp);
   const opponentHpRatio = clamp(state.opponentActive.currentHp / state.opponentActive.maxHp);
+  const livingBench = state.ownBench
+    .filter((bench) => !bench.fainted && bench.currentHp > 0)
+    .map((bench) => ({
+      state: bench,
+      pokemon: team.pokemon.find((pokemon) => pokemon.id === bench.teamPokemonId || pokemon.species === bench.species),
+    }))
+    .filter((entry): entry is { state: BattleState['ownBench'][number]; pokemon: TeamPokemon } => Boolean(entry.pokemon));
+  const pivotTarget = [...livingBench].sort((left, right) => {
+    const leftScore = matchupScore(left.pokemon, state.opponentActive!.species) + clamp(left.state.currentHp / left.state.maxHp) * 0.2;
+    const rightScore = matchupScore(right.pokemon, state.opponentActive!.species) + clamp(right.state.currentHp / right.state.maxHp) * 0.2;
+    return rightScore - leftScore;
+  })[0];
   const moveActions = canUseMoves
     ? active.moves
       .filter((move) => state.ownActive?.remainingPp[move] !== 0)
-      .map((move) => evaluateMove(active, state.opponentActive!.species, move, rolloutCount, ownHpRatio, opponentHpRatio, state))
+      .map((move) => evaluateMove(active, state.opponentActive!.species, move, rolloutCount, ownHpRatio, opponentHpRatio, state, pivotTarget))
     : [];
-  const switchActions = state.ownBench
-    .filter((bench) => !bench.fainted)
-    .map((bench) => team.pokemon.find((pokemon) => pokemon.id === bench.teamPokemonId || pokemon.species === bench.species))
-    .filter((pokemon): pokemon is TeamPokemon => Boolean(pokemon))
-    .map((pokemon) => {
-      const bench = state.ownBench.find((candidate) => candidate.teamPokemonId === pokemon.id || candidate.species === pokemon.species);
+  const switchActions = livingBench.map(({ pokemon, state: bench }) => {
       const urgentExit = ['sleep', 'freeze'].includes(state.ownActive!.status) || Boolean(state.ownActive!.volatileStatuses?.includes('drowsy'));
-      const evaluation = evaluateSwitch(pokemon, state.opponentActive!.species, rolloutCount, bench ? clamp(bench.currentHp / bench.maxHp) : 1, urgentExit);
+      const evaluation = evaluateSwitch(pokemon, state.opponentActive!.species, rolloutCount, clamp(bench.currentHp / bench.maxHp), urgentExit, state.phase === 'forced-switch');
       evaluation.label = `${localizeName('species', pokemon.species)}로 교체`;
       return evaluation;
     });
@@ -310,10 +351,10 @@ export function recommendTurn(input: TurnInput): Recommendation {
     primaryAction: primary,
     alternatives: ranked.slice(1, 3),
     simulatedWinRate: primary.simulatedWinRate,
-    confidence: unsupported ? 'low' : state.opponentActive.revealedMoves.length >= 2 ? 'high' : 'medium',
+    confidence: unsupported ? 'low' : state.opponentPreview.length >= 6 ? 'high' : 'medium',
     assumptions: [
       '행동당 최대 512회, 3턴 근사 롤아웃',
-      '상대 미공개 기술·도구·특성은 일반적인 자속 공격 분포로 대체',
+      '상대의 아직 확인되지 않은 기술·도구·특성은 일반적인 자속 공격 분포로 대체',
       ...(state.trickRoomTurns > 0 ? [`트릭룸 잔여 ${state.trickRoomTurns}턴을 선공 순서에 반영`] : []),
       ...(state.ownActive.volatileStatuses?.includes('drowsy') ? ['내 포켓몬은 하품으로 다음 턴 수면 예정'] : []),
     ],

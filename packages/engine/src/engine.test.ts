@@ -24,6 +24,8 @@ describe('team archetypes', () => {
       opponentSpecies: ['Charizard', 'Blastoise', 'Venusaur', 'Gengar', 'Dragonite', 'Tyranitar'],
     });
     expect(result.assumptions.some((assumption) => assumption.includes('비 파티'))).toBe(true);
+    expect(result.leadPokemonId).toBe('pelipper');
+    expect(result.primaryAction.reasons).toContainEqual(expect.stringContaining('패리퍼 선봉'));
   });
 });
 
@@ -139,6 +141,26 @@ describe('추천', () => {
     const result = recommendTurn({ team, state, rolloutCount: 64 });
     expect(result.primaryAction.label.length).toBeGreaterThan(0);
     expect(result.alternatives.length).toBeGreaterThan(0);
+    expect(result.primaryAction.kind).toBe('move');
+  });
+
+  it('공격 후 교체 기술을 일반 교체와 구분해 추천한다', () => {
+    const baseState = { status: 'none' as const, fainted: false, boosts: { attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0, accuracy: 0, evasion: 0 }, revealedMoves: [] };
+    const state: BattleState = {
+      phase: 'turn', turn: 2, selectedOwnIds: ['scizor', 'garchomp', 'milotic'], opponentPreview: ['Slowking', 'Charizard', 'Tyranitar', 'Gengar', 'Dragonite', 'Venusaur'],
+      ownActive: { ...baseState, teamPokemonId: 'scizor', species: 'Scizor', currentHp: 177, maxHp: 177 },
+      opponentActive: { ...baseState, species: 'Slowking', currentHp: 100, maxHp: 100 },
+      ownBench: [
+        { ...baseState, teamPokemonId: 'garchomp', species: 'Garchomp', currentHp: 183, maxHp: 183 },
+        { ...baseState, teamPokemonId: 'milotic', species: 'Milotic', currentHp: 202, maxHp: 202 },
+      ],
+      opponentBench: [], weather: 'none', terrain: 'none', ownHazards: [], opponentHazards: [], ownMegaUsed: false, opponentMegaUsed: false,
+    };
+    const result = recommendTurn({ team, state, rolloutCount: 64 });
+    expect(result.primaryAction.kind).toBe('move');
+    expect(result.primaryAction.id).toBe('uturn');
+    expect(result.primaryAction.label).toContain('→');
+    expect(result.primaryAction.pivotTargetPokemonId).toBeTruthy();
   });
 
   it('수면·하품 대기·트릭룸 상태를 행동 순위에 반영한다', () => {

@@ -67,10 +67,13 @@ export interface CaptureAnalysis {
 
 export interface HistoryEntry {
   id: string;
+  gameId?: string;
   createdAt: string;
   kind: 'preview' | 'turn' | 'match';
   teamName: string;
   opponent: string[];
+  turn?: number;
+  battleState?: BattleState;
   recommendation?: PreviewRecommendation | Recommendation;
   accepted?: boolean;
   actualAction?: string;

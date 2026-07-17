@@ -12,7 +12,6 @@ interface Props {
 
 const emptyPreviewSlots = (): string[] => Array.from({ length: 6 }, () => '');
 const splitSpecies = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 6);
-const splitMoves = (value: string) => value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).slice(0, 4);
 const normalizeSpeciesSearch = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/[\s\-_.()]+/g, '');
 const statusOptions: Array<[BattlePokemonState['status'], string]> = [
   ['none', '정상'], ['sleep', '잠듦'], ['burn', '화상'], ['poison', '독'], ['toxic', '맹독'], ['paralysis', '마비'], ['freeze', '얼음'], ['unknown', '미확인'],
@@ -24,8 +23,10 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [speciesFilter, setSpeciesFilter] = useState('');
   const [opponentActive, setOpponentActive] = useState('');
   const [ownActiveId, setOwnActiveId] = useState('');
-  const [ownHp, setOwnHp] = useState(100);
+  const [ownHp, setOwnHp] = useState(1);
+  const [ownMaxHp, setOwnMaxHp] = useState(1);
   const [opponentHp, setOpponentHp] = useState(100);
+  const [opponentMaxHp, setOpponentMaxHp] = useState(100);
   const [turn, setTurn] = useState(1);
   const [ownStatus, setOwnStatus] = useState<BattlePokemonState['status']>('none');
   const [opponentStatus, setOpponentStatus] = useState<BattlePokemonState['status']>('none');
@@ -34,7 +35,6 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [weather, setWeather] = useState<BattleState['weather']>('none');
   const [terrain, setTerrain] = useState<BattleState['terrain']>('none');
   const [trickRoomTurns, setTrickRoomTurns] = useState(0);
-  const [opponentMoves, setOpponentMoves] = useState('');
   const [monitoring, setMonitoring] = useState(false);
   const [vision, setVision] = useState<VisionResult | null>(null);
   const [localVisionSlots, setLocalVisionSlots] = useState<LocalVisionSlot[]>([]);
@@ -48,10 +48,30 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
   const [turnRecommendation, setTurnRecommendation] = useState<Recommendation | null>(null);
   const captureInFlight = useRef(false);
   const lastAutoRecommendation = useRef('');
+  const gameId = useRef(crypto.randomUUID());
+  const gameHasTurns = useRef(false);
+  const ownHpById = useRef<Record<string, { currentHp: number; maxHp: number }>>({});
+  const previousTurn = useRef(1);
 
   useEffect(() => {
-    if (team && !ownActiveId) setOwnActiveId(team.pokemon[0]?.id ?? '');
-  }, [team, ownActiveId]);
+    if (!team) return;
+    ownHpById.current = Object.fromEntries(team.pokemon.map((pokemon) => [pokemon.id, { currentHp: pokemon.stats.hp, maxHp: pokemon.stats.hp }]));
+    const active = team.pokemon.find((pokemon) => pokemon.id === ownActiveId) ?? team.pokemon[0];
+    if (!active) return;
+    setOwnActiveId(active.id);
+    setOwnHp(active.stats.hp);
+    setOwnMaxHp(active.stats.hp);
+  }, [team?.id]);
+
+  useEffect(() => {
+    if (ownActiveId) ownHpById.current[ownActiveId] = { currentHp: ownHp, maxHp: ownMaxHp };
+  }, [ownActiveId, ownHp, ownMaxHp]);
+
+  useEffect(() => {
+    const elapsed = turn - previousTurn.current;
+    if (elapsed > 0 && trickRoomTurns > 0) setTrickRoomTurns((current) => Math.max(0, current - elapsed));
+    previousTurn.current = turn;
+  }, [turn]);
 
   useEffect(() => {
     void window.pochamp.getVisionReferenceStatus().then(setReferenceStatus);
@@ -78,11 +98,24 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     () => splitSpecies(opponentText).map(resolveSpeciesName).filter((species): species is string => Boolean(species)),
     [opponentText, resolveSpeciesName],
   );
+  useEffect(() => {
+    const resolved = resolveSpeciesName(opponentActive);
+    if (resolved && opponentSpecies.length > 0 && !opponentSpecies.includes(resolved)) setOpponentActive('');
+  }, [opponentActive, opponentSpecies, resolveSpeciesName]);
   const selectedIds = previewRecommendation?.selectedPokemonIds ?? team?.pokemon.slice(0, 3).map((pokemon) => pokemon.id) ?? [];
   const selectedOrder = useMemo(() => {
     if (!previewRecommendation) return [];
     return [previewRecommendation.leadPokemonId, ...previewRecommendation.selectedPokemonIds.filter((id) => id !== previewRecommendation.leadPokemonId)];
   }, [previewRecommendation]);
+
+  const changeOwnActive = useCallback((pokemonId: string) => {
+    const pokemon = team?.pokemon.find((entry) => entry.id === pokemonId);
+    if (!pokemon) return;
+    const saved = ownHpById.current[pokemonId] ?? { currentHp: pokemon.stats.hp, maxHp: pokemon.stats.hp };
+    setOwnActiveId(pokemonId);
+    setOwnHp(saved.currentHp);
+    setOwnMaxHp(saved.maxHp);
+  }, [team]);
 
   const applyPreviewSlots = (slots: string[], needsConfirmation: boolean) => {
     const normalized = Array.from({ length: 6 }, (_, index) => slots[index] ?? '');
@@ -131,11 +164,19 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
         }
         if (slots.some(Boolean)) applyPreviewSlots(slots, true);
         if (result.vision.opponentActiveSpecies) setOpponentActive(result.vision.opponentActiveSpecies);
+        let capturedOwn = team?.pokemon.find((pokemon) => pokemon.id === ownActiveId);
         if (result.vision.ownActiveSpecies && team) {
-          setOwnActiveId(team.pokemon.find((pokemon) => pokemon.species === result.vision?.ownActiveSpecies)?.id ?? ownActiveId);
+          capturedOwn = team.pokemon.find((pokemon) => pokemon.species === result.vision?.ownActiveSpecies) ?? capturedOwn;
+          if (capturedOwn) changeOwnActive(capturedOwn.id);
         }
-        if (result.vision.ownHpPercent !== null) setOwnHp(result.vision.ownHpPercent);
-        if (result.vision.opponentHpPercent !== null) setOpponentHp(result.vision.opponentHpPercent);
+        if (result.vision.ownHpPercent !== null && capturedOwn) {
+          const maxHp = ownHpById.current[capturedOwn.id]?.maxHp ?? capturedOwn.stats.hp;
+          const currentHp = Math.round(maxHp * result.vision.ownHpPercent / 100);
+          ownHpById.current[capturedOwn.id] = { currentHp, maxHp };
+          setOwnMaxHp(maxHp);
+          setOwnHp(currentHp);
+        }
+        if (result.vision.opponentHpPercent !== null) setOpponentHp(Math.round(opponentMaxHp * result.vision.opponentHpPercent / 100));
         if (result.vision.ownStatus !== null) setOwnStatus(result.vision.ownStatus);
         if (result.vision.opponentStatus !== null) setOpponentStatus(result.vision.opponentStatus);
         setOwnDrowsy(result.vision.ownVolatileStatuses.includes('drowsy'));
@@ -143,7 +184,6 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
         if (result.vision.weather !== null) setWeather(result.vision.weather);
         if (result.vision.terrain !== null) setTerrain(result.vision.terrain);
         if (result.vision.trickRoomTurns !== null) setTrickRoomTurns(result.vision.trickRoomTurns);
-        if (result.vision.visibleMoves.length) setOpponentMoves(result.vision.visibleMoves.join('\n'));
         const autoConfirmed = monitoring
           && result.vision.phase === 'turn'
           && result.vision.confidence >= 0.82
@@ -165,18 +205,53 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
       captureInFlight.current = false;
       setBusy(false);
     }
-  }, [monitoring, team, ownActiveId]);
+  }, [changeOwnActive, monitoring, opponentMaxHp, team, ownActiveId]);
 
   useEffect(() => window.pochamp.onCaptureHotkey(capture), [capture]);
 
-  const record = useCallback(async (kind: 'preview' | 'turn', recommendation: PreviewRecommendation | Recommendation) => {
+  const record = useCallback(async (kind: 'preview' | 'turn', recommendation: PreviewRecommendation | Recommendation, battleState?: BattleState) => {
     if (!team) return;
     const entry: HistoryEntry = {
-      id: crypto.randomUUID(), createdAt: new Date().toISOString(), kind, teamName: team.name,
-      opponent: opponentSpecies, recommendation,
+      id: crypto.randomUUID(), gameId: gameId.current, createdAt: new Date().toISOString(), kind, teamName: team.name,
+      opponent: opponentSpecies, turn: battleState?.turn, battleState, recommendation,
     };
     onHistory(await window.pochamp.addHistory(entry));
   }, [onHistory, opponentSpecies, team]);
+
+  const beginNewGame = () => {
+    gameId.current = crypto.randomUUID();
+    gameHasTurns.current = false;
+    lastAutoRecommendation.current = '';
+    setTurn(1);
+    setOpponentText('');
+    setPreviewSlots(emptyPreviewSlots());
+    setOpponentActive('');
+    setOpponentHp(100);
+    setOpponentMaxHp(100);
+    setOpponentStatus('none');
+    setOpponentDrowsy(false);
+    setOwnStatus('none');
+    setOwnDrowsy(false);
+    if (team) {
+      ownHpById.current = Object.fromEntries(team.pokemon.map((pokemon) => [pokemon.id, { currentHp: pokemon.stats.hp, maxHp: pokemon.stats.hp }]));
+      const first = team.pokemon[0];
+      if (first) {
+        setOwnActiveId(first.id);
+        setOwnHp(first.stats.hp);
+        setOwnMaxHp(first.stats.hp);
+      }
+    }
+    setWeather('none');
+    setTerrain('none');
+    setTrickRoomTurns(0);
+    setPreviewRecommendation(null);
+    setTurnRecommendation(null);
+    setVision(null);
+    setLocalVisionSlots([]);
+    setScreenshot('');
+    setConfirmed(true);
+    setStatus('새 게임 입력 준비');
+  };
 
   const runPreview = async () => {
     if (!team || opponentSpecies.length < 3) {
@@ -185,9 +260,14 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     }
     setBusy(true);
     try {
+      if (gameHasTurns.current) {
+        gameId.current = crypto.randomUUID();
+        gameHasTurns.current = false;
+        setTurn(1);
+      }
       const recommendation = await window.pochamp.recommendPreview({ team, opponentSpecies });
       setPreviewRecommendation(recommendation);
-      setOwnActiveId(recommendation.leadPokemonId);
+      changeOwnActive(recommendation.leadPokemonId);
       await record('preview', recommendation);
       setStatus('출전 추천 완료');
     } catch (error) {
@@ -208,20 +288,27 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
       return;
     }
     const resolvedOpponentActive = resolveSpeciesName(opponentActive);
-    if (!resolvedOpponentActive) {
-      setStatus('상대 활성 포켓몬을 현재 규정 목록에서 선택해 주세요.');
+    if (!resolvedOpponentActive || !opponentSpecies.includes(resolvedOpponentActive)) {
+      setStatus('상대 활성 포켓몬을 인식된 상대 팀 6마리에서 선택해 주세요.');
+      return;
+    }
+    if (ownMaxHp <= 0 || opponentMaxHp <= 0 || ownHp > ownMaxHp || opponentHp > opponentMaxHp) {
+      setStatus('HP는 현재값이 최대값보다 크지 않게 입력해 주세요.');
       return;
     }
     const selected = team.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id));
     const state: BattleState = {
       phase: 'turn', turn, selectedOwnIds: selectedIds, opponentPreview: opponentSpecies,
-      ownActive: { ...battlePokemonState(active, ownHp), status: ownStatus, volatileStatuses: ownDrowsy ? ['drowsy'] : [] },
+      ownActive: { ...battlePokemonState(active, ownHp, ownMaxHp), status: ownStatus, volatileStatuses: ownDrowsy ? ['drowsy'] : [] },
       opponentActive: {
-        species: resolvedOpponentActive, currentHp: opponentHp, maxHp: 100, status: opponentStatus, volatileStatuses: opponentDrowsy ? ['drowsy'] : [], fainted: opponentHp <= 0,
+        species: resolvedOpponentActive, currentHp: opponentHp, maxHp: opponentMaxHp, status: opponentStatus, volatileStatuses: opponentDrowsy ? ['drowsy'] : [], fainted: opponentHp <= 0,
         boosts: { attack: 0, defense: 0, specialAttack: 0, specialDefense: 0, speed: 0, accuracy: 0, evasion: 0 },
-        remainingPp: {}, revealedMoves: splitMoves(opponentMoves),
+        remainingPp: {}, revealedMoves: [],
       },
-      ownBench: selected.filter((pokemon) => pokemon.id !== active.id).map((pokemon) => battlePokemonState(pokemon)),
+      ownBench: selected.filter((pokemon) => pokemon.id !== active.id).map((pokemon) => {
+        const hp = ownHpById.current[pokemon.id] ?? { currentHp: pokemon.stats.hp, maxHp: pokemon.stats.hp };
+        return battlePokemonState(pokemon, hp.currentHp, hp.maxHp);
+      }),
       opponentBench: [], weather, terrain, ownHazards: [], opponentHazards: [],
       ownMegaUsed: false, opponentMegaUsed: false, trickRoomTurns,
     };
@@ -229,22 +316,23 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     try {
       const recommendation = await window.pochamp.recommendTurn({ team, state, rolloutCount: 256 });
       setTurnRecommendation(recommendation);
-      await record('turn', recommendation);
+      gameHasTurns.current = true;
+      await record('turn', recommendation, state);
       setStatus(`턴 ${turn} 행동 추천 완료`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
-  }, [confirmed, opponentActive, opponentDrowsy, opponentHp, opponentMoves, opponentSpecies, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownStatus, record, resolveSpeciesName, selectedIds, team, terrain, trickRoomTurns, turn, weather]);
+  }, [confirmed, opponentActive, opponentDrowsy, opponentHp, opponentMaxHp, opponentSpecies, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownMaxHp, ownStatus, record, resolveSpeciesName, selectedIds, team, terrain, trickRoomTurns, turn, weather]);
 
   useEffect(() => {
     if (!monitoring || !confirmed || !vision || vision.phase !== 'turn' || busy) return;
-    const signature = JSON.stringify([vision, ownActiveId, opponentActive, ownHp, opponentHp, ownStatus, opponentStatus, ownDrowsy, opponentDrowsy, weather, terrain, trickRoomTurns, opponentMoves]);
+    const signature = JSON.stringify([vision, ownActiveId, opponentActive, ownHp, ownMaxHp, opponentHp, opponentMaxHp, ownStatus, opponentStatus, ownDrowsy, opponentDrowsy, weather, terrain, trickRoomTurns]);
     if (lastAutoRecommendation.current === signature) return;
     lastAutoRecommendation.current = signature;
     void runTurn();
-  }, [busy, confirmed, monitoring, opponentActive, opponentDrowsy, opponentHp, opponentMoves, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownStatus, runTurn, terrain, trickRoomTurns, vision, weather]);
+  }, [busy, confirmed, monitoring, opponentActive, opponentDrowsy, opponentHp, opponentMaxHp, opponentStatus, ownActiveId, ownDrowsy, ownHp, ownMaxHp, ownStatus, runTurn, terrain, trickRoomTurns, vision, weather]);
 
   useEffect(() => {
     if (!monitoring) return;
@@ -292,7 +380,7 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
     <section className="page-stack">
       <div className="section-heading">
         <div><span className="eyebrow">BlueStacks 캡처 · 친선전</span><h2>배틀 도우미</h2></div>
-        <div className="capture-controls"><button className={monitoring ? 'monitor-button active' : 'monitor-button'} onClick={() => { setMonitoring((current) => !current); setStatus(monitoring ? '연속 화면 분석을 중지했습니다.' : '연속 화면 분석을 시작합니다. 6초마다 변경 화면을 확인합니다.'); }}>{monitoring ? '● 연속 분석 중지' : '○ 연속 화면 분석'}</button><button className="capture-button" disabled={busy} onClick={capture}><kbd>Ctrl Shift Space</kbd>{busy ? '분석 중…' : '현재 화면 캡처'}</button></div>
+        <div className="capture-controls"><button onClick={beginNewGame}>새 게임 시작</button><button className={monitoring ? 'monitor-button active' : 'monitor-button'} onClick={() => { setMonitoring((current) => !current); setStatus(monitoring ? '연속 화면 분석을 중지했습니다.' : '연속 화면 분석을 시작합니다. 6초마다 변경 화면을 확인합니다.'); }}>{monitoring ? '● 연속 분석 중지' : '○ 연속 화면 분석'}</button><button className="capture-button" disabled={busy} onClick={capture}><kbd>Ctrl Shift Space</kbd>{busy ? '분석 중…' : '현재 화면 캡처'}</button></div>
       </div>
       <div className="status-line"><span className={busy ? 'pulse' : ''} />{status}</div>
       {monitoring && <div className="monitor-notice">화면이 바뀐 프레임만 NVIDIA로 전송합니다. 신뢰도 82% 이상인 턴은 상태를 자동 반영해 행동을 다시 추천하며, 게임 조작은 하지 않습니다.</div>}
@@ -378,18 +466,18 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
             <div className="combatant-grid">
               <section className="combatant-card own">
                 <div className="combatant-title"><b>내 포켓몬</b><span>출전 포켓몬 상태</span></div>
-                <label className="field"><span>활성 포켓몬</span><select value={ownActiveId} onChange={(event) => setOwnActiveId(event.target.value)}>{team?.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id)).map((pokemon) => <option key={pokemon.id} value={pokemon.id}>{speciesName(pokemon.species)}</option>)}</select></label>
+                <label className="field"><span>활성 포켓몬</span><select value={ownActiveId} onChange={(event) => changeOwnActive(event.target.value)}>{team?.pokemon.filter((pokemon) => selectedIds.includes(pokemon.id)).map((pokemon) => <option key={pokemon.id} value={pokemon.id}>{speciesName(pokemon.species)}</option>)}</select></label>
                 <div className="combatant-inline">
-                  <label className="field"><span>HP %</span><input type="number" min="0" max="100" value={ownHp} onChange={(event) => setOwnHp(Number(event.target.value))} /></label>
+                  <label className="field"><span>HP · 현재 / 최대</span><div className="hp-input-pair"><input aria-label="내 현재 HP" type="number" min="0" value={ownHp} onChange={(event) => setOwnHp(Math.max(0, Number(event.target.value)))} /><b>/</b><input aria-label="내 최대 HP" type="number" min="1" value={ownMaxHp} onChange={(event) => setOwnMaxHp(Math.max(1, Number(event.target.value)))} /></div></label>
                   <label className="field"><span>상태</span><select value={ownStatus} onChange={(event) => setOwnStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 </div>
                 <label className="check state-check"><input type="checkbox" checked={ownDrowsy} onChange={(event) => setOwnDrowsy(event.target.checked)} />하품으로 다음 턴 잠듦</label>
               </section>
               <section className="combatant-card opponent">
                 <div className="combatant-title"><b>상대 포켓몬</b><span>현재 확인된 상태</span></div>
-                <label className="field"><span>활성 포켓몬</span><input list="battle-species-list" value={opponentActive} onChange={(event) => setOpponentActive(event.target.value)} placeholder="이름 입력 또는 선택" /></label>
+                <label className="field"><span>활성 포켓몬 · 상대 미리보기</span><select value={resolveSpeciesName(opponentActive) ?? ''} onChange={(event) => setOpponentActive(event.target.value)}><option value="">인식된 상대 팀에서 선택</option>{opponentSpecies.map((species) => <option key={species} value={species}>{speciesName(species)}</option>)}</select></label>
                 <div className="combatant-inline">
-                  <label className="field"><span>HP %</span><input type="number" min="0" max="100" value={opponentHp} onChange={(event) => setOpponentHp(Number(event.target.value))} /></label>
+                  <label className="field"><span>HP · 현재 / 최대</span><div className="hp-input-pair"><input aria-label="상대 현재 HP" type="number" min="0" value={opponentHp} onChange={(event) => setOpponentHp(Math.max(0, Number(event.target.value)))} /><b>/</b><input aria-label="상대 최대 HP" type="number" min="1" value={opponentMaxHp} onChange={(event) => setOpponentMaxHp(Math.max(1, Number(event.target.value)))} /></div></label>
                   <label className="field"><span>상태</span><select value={opponentStatus} onChange={(event) => setOpponentStatus(event.target.value as BattlePokemonState['status'])}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 </div>
                 <label className="check state-check"><input type="checkbox" checked={opponentDrowsy} onChange={(event) => setOpponentDrowsy(event.target.checked)} />하품으로 다음 턴 잠듦</label>
@@ -400,12 +488,8 @@ export function BattleAssistant({ team, regulation, onHistory }: Props) {
               <div className="field-effect-grid">
                 <label className="field"><span>날씨</span><select value={weather} onChange={(event) => setWeather(event.target.value as BattleState['weather'])}><option value="none">없음</option><option value="rain">비</option><option value="sun">쾌청</option><option value="sand">모래바람</option><option value="snow">설경</option><option value="unknown">미확인</option></select></label>
                 <label className="field"><span>필드</span><select value={terrain} onChange={(event) => setTerrain(event.target.value as BattleState['terrain'])}><option value="none">없음</option><option value="electric">일렉트릭</option><option value="grassy">그래스</option><option value="misty">미스트</option><option value="psychic">사이코</option><option value="unknown">미확인</option></select></label>
-                <label className="field"><span>트릭룸 남은 턴</span><input type="number" min="0" max="5" value={trickRoomTurns} onChange={(event) => setTrickRoomTurns(Math.max(0, Math.min(5, Number(event.target.value))))} /></label>
+                <div className={trickRoomTurns > 0 ? 'trick-room-control active' : 'trick-room-control'}><label className="check"><input type="checkbox" checked={trickRoomTurns > 0} onChange={(event) => setTrickRoomTurns(event.target.checked ? 5 : 0)} /><b>트릭룸 활성</b></label><label className="field"><span>남은 턴</span><input type="number" min="0" max="5" disabled={trickRoomTurns === 0} value={trickRoomTurns} onChange={(event) => setTrickRoomTurns(Math.max(1, Math.min(5, Number(event.target.value))))} /></label></div>
               </div>
-            </section>
-            <section className="turn-field-group">
-              <div className="turn-group-heading"><b>상대가 공개한 기술</b><span>쉼표 또는 줄바꿈으로 최대 4개</span></div>
-              <label className="field"><textarea rows={2} value={opponentMoves} onChange={(event) => setOpponentMoves(event.target.value)} placeholder={'하품\n트릭룸'} /></label>
             </section>
           </div>
           <button className="primary full" disabled={!team || busy || !opponentActive} onClick={runTurn}>현재 상태로 행동 1~3순위 추천</button>

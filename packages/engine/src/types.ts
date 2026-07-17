@@ -151,6 +151,7 @@ export interface ActionEvaluation {
   outcome: { favorable: number; neutral: number; unfavorable: number };
   reasons: string[];
   risks: string[];
+  pivotTargetPokemonId?: string;
 }
 
 export interface Recommendation {
