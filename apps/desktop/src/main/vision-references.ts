@@ -80,7 +80,7 @@ export interface PokeApiPokemonRow {
 
 const GRID_SIZE = 16;
 const MAX_LEARNED_PER_SPECIES = 20;
-const SEED_REVISION = 2;
+const SEED_REVISION = 3;
 const CROP_REVISION = 2;
 const POKEAPI_CSV = 'https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv';
 const SPRITE_ROOT = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
@@ -216,10 +216,41 @@ export function resolvePokeApiPokemonId(species: VisionSpeciesReference, rows: r
   const wanted = toID(species.name);
   const exact = rows.find((row) => toID(row.identifier) === wanted);
   if (exact) return exact.id;
+  // Showdown의 기본 종 이름이 PokeAPI에서는 기본 폼 이름으로만 존재하는 경우
+  // (예: Mimikyu -> mimikyu-disguised) 변형 ID가 아니라 전국도감 ID를 사용한다.
+  if (!species.name.includes('-')) return species.nationalDex;
   const close = rows
     .filter((row) => toID(row.identifier).startsWith(wanted) || wanted.startsWith(toID(row.identifier)))
     .sort((left, right) => Math.abs(toID(left.identifier).length - wanted.length) - Math.abs(toID(right.identifier).length - wanted.length))[0];
   return close?.id ?? species.nationalDex;
+}
+
+export interface VisionSeedSourceGroup {
+  key: 'scarlet-violet' | 'home' | 'fallback';
+  urls: string[];
+}
+
+export function visionSeedSourceGroups(species: VisionSpeciesReference, rows: readonly PokeApiPokemonRow[]): VisionSeedSourceGroup[] {
+  const pokemonId = resolvePokeApiPokemonId(species, rows);
+  const identifiers = [...new Set([pokemonId, species.nationalDex])];
+  return [
+    {
+      key: 'scarlet-violet',
+      urls: identifiers.map((id) => `${SPRITE_ROOT}/versions/generation-ix/scarlet-violet/${id}.png`),
+    },
+    {
+      key: 'home',
+      urls: identifiers.map((id) => `${SPRITE_ROOT}/other/home/${id}.png`),
+    },
+    {
+      key: 'fallback',
+      urls: identifiers.flatMap((id) => [
+        `${SPRITE_ROOT}/versions/generation-viii/icons/${id}.png`,
+        `${SPRITE_ROOT}/other/official-artwork/${id}.png`,
+        `${SPRITE_ROOT}/${id}.png`,
+      ]),
+    },
+  ];
 }
 
 function normalizeVector(values: number[]): number[] {
@@ -261,17 +292,24 @@ export function descriptorFromBgra(bitmap: Buffer, width: number, height: number
     return [bitmap[offset + 2] ?? 0, bitmap[offset + 1] ?? 0, bitmap[offset] ?? 0, bitmap[offset + 3] ?? 255];
   };
   const edge: Array<[number, number, number]> = [];
+  const border = Math.max(1, Math.floor(Math.min(width, height) * 0.08));
   for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < Math.max(2, Math.floor(width * 0.1)); x += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x >= border && x < width - border && y >= border && y < height - border) continue;
       const [r, g, b] = pixel(x, y);
       edge.push([r, g, b]);
     }
   }
-  const background = edge.reduce((sum, entry) => [sum[0] + entry[0], sum[1] + entry[1], sum[2] + entry[2]], [0, 0, 0])
-    .map((value) => value / Math.max(1, edge.length));
-  const [backgroundRed = 0, backgroundGreen = 0, backgroundBlue = 0] = background;
+  const medianChannel = (channel: number): number => {
+    const values = edge.map((entry) => entry[channel] ?? 0).sort((left, right) => left - right);
+    return values[Math.floor(values.length / 2)] ?? 0;
+  };
+  const backgroundRed = medianChannel(0);
+  const backgroundGreen = medianChannel(1);
+  const backgroundBlue = medianChannel(2);
   const backgroundHue = hue(backgroundRed, backgroundGreen, backgroundBlue);
   const mask = new Uint8Array(width * height);
+  const histogram = Array.from({ length: 12 }, () => 0);
   let minimumX = width;
   let minimumY = height;
   let maximumX = 0;
@@ -295,6 +333,8 @@ export function descriptorFromBgra(bitmap: Buffer, width: number, height: number
       minimumY = Math.min(minimumY, y);
       maximumX = Math.max(maximumX, x);
       maximumY = Math.max(maximumY, y);
+      const histogramIndex = Math.min(11, Math.floor(pixelHue / 30));
+      histogram[histogramIndex] = (histogram[histogramIndex] ?? 0) + 1;
     }
   }
   if (foregroundCount < 10) {
@@ -307,26 +347,48 @@ export function descriptorFromBgra(bitmap: Buffer, width: number, height: number
   const boxWidth = Math.max(1, maximumX - minimumX + 1);
   const boxHeight = Math.max(1, maximumY - minimumY + 1);
   const vector: number[] = [];
-  const histogram = Array.from({ length: 12 }, () => 0);
   for (let targetY = 0; targetY < GRID_SIZE; targetY += 1) {
     for (let targetX = 0; targetX < GRID_SIZE; targetX += 1) {
-      const sourceX = Math.min(maximumX, minimumX + Math.floor((targetX + 0.5) * boxWidth / GRID_SIZE));
-      const sourceY = Math.min(maximumY, minimumY + Math.floor((targetY + 0.5) * boxHeight / GRID_SIZE));
-      const active = mask[sourceY * width + sourceX] ? 1 : 0;
-      const [r, g, b] = pixel(sourceX, sourceY);
-      vector.push(active * 0.15, active * r / 510, active * g / 510, active * b / 510);
-      const histogramIndex = Math.min(11, Math.floor(hue(r, g, b) / 30));
-      if (active) histogram[histogramIndex] = (histogram[histogramIndex] ?? 0) + 1;
+      const startX = Math.min(maximumX, minimumX + Math.floor(targetX * boxWidth / GRID_SIZE));
+      const endX = Math.min(maximumX + 1, Math.max(startX + 1, minimumX + Math.ceil((targetX + 1) * boxWidth / GRID_SIZE)));
+      const startY = Math.min(maximumY, minimumY + Math.floor(targetY * boxHeight / GRID_SIZE));
+      const endY = Math.min(maximumY + 1, Math.max(startY + 1, minimumY + Math.ceil((targetY + 1) * boxHeight / GRID_SIZE)));
+      let samples = 0;
+      let activeSamples = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      for (let sourceY = startY; sourceY < endY; sourceY += 1) {
+        for (let sourceX = startX; sourceX < endX; sourceX += 1) {
+          samples += 1;
+          if (!mask[sourceY * width + sourceX]) continue;
+          const [r, g, b] = pixel(sourceX, sourceY);
+          activeSamples += 1;
+          red += r;
+          green += g;
+          blue += b;
+        }
+      }
+      const occupancy = activeSamples / Math.max(1, samples);
+      const divisor = Math.max(1, activeSamples) * 765;
+      // Champions 슬롯은 반투명 적색 카드 위에 렌더되어 원본 색이 크게 변한다.
+      // 셀 평균 실루엣을 주 특징으로 두고 색상은 동률 후보를 가르는 보조 특징으로만 사용한다.
+      vector.push(occupancy * 0.6, occupancy * red / divisor, occupancy * green / divisor, occupancy * blue / divisor);
     }
   }
   const histogramTotal = Math.max(1, histogram.reduce((sum, value) => sum + value, 0));
-  vector.push(...histogram.map((value) => value / histogramTotal * 5), boxWidth / width, boxHeight / height);
+  vector.push(...histogram.map((value) => value / histogramTotal * 1.5), boxWidth / width, boxHeight / height);
   return normalizeVector(vector);
 }
 
 function descriptorFromImage(image: NativeImageLike, mode: 'seed' | 'capture'): number[] {
-  const resized = image.resize({ width: 32, height: 32, quality: 'better' });
-  return descriptorFromBgra(resized.toBitmap(), 32, 32, mode);
+  const size = image.getSize();
+  const scale = Math.min(1, 128 / Math.max(size.width, size.height));
+  const normalized = scale < 1
+    ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'better' })
+    : image;
+  const normalizedSize = normalized.getSize();
+  return descriptorFromBgra(normalized.toBitmap(), normalizedSize.width, normalizedSize.height, mode);
 }
 
 function parsePokemonRows(csv: string): PokeApiPokemonRow[] {
@@ -449,25 +511,25 @@ export class VisionReferenceStore {
         const species = pending[cursor++];
         if (!species) break;
         const pokemonId = resolvePokeApiPokemonId(species, rows);
-        const identifiers = [...new Set([pokemonId, species.nationalDex])];
-        const urls = identifiers.flatMap((id) => [
-          `${SPRITE_ROOT}/versions/generation-ix/scarlet-violet/${id}.png`,
-          `${SPRITE_ROOT}/versions/generation-viii/icons/${id}.png`,
-          `${SPRITE_ROOT}/other/home/${id}.png`,
-          `${SPRITE_ROOT}/other/official-artwork/${id}.png`,
-          `${SPRITE_ROOT}/${id}.png`,
-        ]);
-        const downloaded = await fetchFirstImage(urls);
-        if (!downloaded) continue;
-        const image = this.images.createFromBuffer(downloaded.buffer);
-        if (image.isEmpty()) continue;
-        const file = join('seed', `${safeName(species.name)}.png`);
+        const sourceGroups = visionSeedSourceGroups(species, rows);
+        const primaryDownloads = (await Promise.all(sourceGroups.slice(0, 2).map(async (group) => {
+          const downloaded = await fetchFirstImage(group.urls);
+          return downloaded ? { ...downloaded, key: group.key } : null;
+        }))).filter((entry): entry is { buffer: Buffer; url: string; key: VisionSeedSourceGroup['key'] } => Boolean(entry));
+        const fallback = primaryDownloads.length ? null : await fetchFirstImage(sourceGroups[2]?.urls ?? []);
+        const downloads = fallback ? [{ ...fallback, key: 'fallback' as const }] : primaryDownloads;
+        if (!downloads.length) continue;
         await mkdir(join(this.root, 'seed'), { recursive: true });
-        await writeFile(join(this.root, file), image.toPNG());
-        additions.push({
-          id: randomUUID(), species: species.name, kind: 'seed', file, createdAt: new Date().toISOString(),
-          types: types.get(pokemonId) ?? types.get(species.nationalDex) ?? [], sourceUrl: downloaded.url,
-        });
+        for (const downloaded of downloads) {
+          const image = this.images.createFromBuffer(downloaded.buffer);
+          if (image.isEmpty()) continue;
+          const file = join('seed', `${safeName(species.name)}-${downloaded.key}.png`);
+          await writeFile(join(this.root, file), image.toPNG());
+          additions.push({
+            id: randomUUID(), species: species.name, kind: 'seed', file, createdAt: new Date().toISOString(),
+            types: types.get(pokemonId) ?? types.get(species.nationalDex) ?? [], sourceUrl: downloaded.url,
+          });
+        }
       }
     });
     await Promise.all(workers);

@@ -2,6 +2,9 @@
 
 ## Last Run
 
+- 2026-07-17: v0.5.2 recognition goal verified against the supplied 1919x1075 Champions preview. Robust scale-normalized descriptors matched Primarina/Starmie/Metagross/Hydreigon/Hippowdon/Mimikyu at 0.99 (6/6), and confirmed learned slots now bypass the remote call.
+- 2026-07-17: Seed revision 3 stores both Scarlet/Violet and Pokémon HOME renders (422 seed files for 235 regulation species/forms). NIM now receives only the six opponent crops; limiting the current Nemotron reasoning budget reduced the same-frame request from a 25-second timeout to a successful 10.2 seconds.
+
 - 2026-07-17: 상대 팀 미리보기에 한글·영문 검색 필터를 추가하고, 현재 턴 입력을 내 포켓몬/상대 포켓몬/필드 효과/공개 기술 비교 박스로 재배치했다. 기본 창 폭에서는 배틀 입력과 추천을 한 열로 전환해 양쪽 상태 카드의 너비를 확보했다.
 - 2026-07-17: Full-screen preview recognition now detects the six red opponent cards before cropping the Pokemon render area. The supplied 1919x1075 frame, a 1440px resize, and a taskbar-free window variant all resolve Kingambit/Aegislash/Gardevoir/Torkoal/Garchomp/Archaludon at 0.99 after crop-revision-2 learning.
 - 2026-07-17: Stale learned crops are retained on disk but excluded from matching; low-confidence seed-only matches no longer auto-fill team slots, and high-confidence current learned crops can override a conflicting NIM guess.

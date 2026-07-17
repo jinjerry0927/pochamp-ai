@@ -53,5 +53,34 @@ describe('NIM 응답 파서', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
   });
+
+  it('상대 미리보기는 전체 화면 대신 순서가 고정된 슬롯 이미지 여섯 장을 전송한다', async () => {
+    const images = Array.from({ length: 6 }, (_, index) => `data:image/png;base64,SLOT${index + 1}`);
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        max_tokens: number;
+        reasoning_budget?: number;
+        messages: Array<{ content: Array<{ type: string; image_url?: { url: string }; text?: string }> }>;
+      };
+      const content = body.messages[0]?.content ?? [];
+      expect(content.filter((entry) => entry.type === 'image_url').map((entry) => entry.image_url?.url)).toEqual(images);
+      expect(body.max_tokens).toBe(900);
+      expect(body.reasoning_budget).toBe(256);
+      expect(content.find((entry) => entry.type === 'text')?.text).toContain('이미지 N은 반드시 opponentPreviewSlots의 slot N에 대응');
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '{"phase":"preview","confidence":0.9,"opponentPreview":[],"ownActiveSpecies":null,"opponentActiveSpecies":null,"ownHpPercent":null,"opponentHpPercent":null,"ownStatus":null,"opponentStatus":null,"visibleMoves":[],"unknownFields":[],"notes":[]}' } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await analyzeWithNim({
+      apiKey: 'test-key',
+      model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      imageDataUrl: 'data:image/png;base64,FULL',
+      slotImageDataUrls: images,
+      allowedSpecies: [],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 

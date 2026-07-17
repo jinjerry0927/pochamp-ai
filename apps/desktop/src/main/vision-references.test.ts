@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cosineSimilarity, descriptorFromBgra, detectOpponentSlotRectsFromBgra, opponentSlotRect, resolvePokeApiPokemonId } from './vision-references.js';
+import { cosineSimilarity, descriptorFromBgra, detectOpponentSlotRectsFromBgra, opponentSlotRect, resolvePokeApiPokemonId, visionSeedSourceGroups } from './vision-references.js';
 
 describe('로컬 포켓몬 이미지 참조', () => {
   it('패널 검출 실패 시 Full Screen 기준 포켓몬 렌더 영역으로 분할한다', () => {
@@ -43,6 +43,17 @@ describe('로컬 포켓몬 이미지 참조', () => {
       { name: 'Charizard-Mega-X', displayName: '메가리자몽X', nationalDex: 6 },
       [{ id: 6, identifier: 'charizard' }, { id: 10034, identifier: 'charizard-mega-x' }],
     )).toBe(10034);
+  });
+
+  it('기본 종 이름은 비슷한 변형 ID 대신 National Dex를 사용한다', () => {
+    const species = { name: 'Mimikyu', displayName: '따라큐', nationalDex: 778 };
+    const rows = [{ id: 10143, identifier: 'mimikyu-disguised' }, { id: 10144, identifier: 'mimikyu-busted' }];
+    expect(resolvePokeApiPokemonId(species, rows)).toBe(778);
+    expect(visionSeedSourceGroups(species, rows).map((group) => group.urls[0])).toEqual([
+      expect.stringContaining('/generation-ix/scarlet-violet/778.png'),
+      expect.stringContaining('/other/home/778.png'),
+      expect.stringContaining('/generation-viii/icons/778.png'),
+    ]);
   });
 
   it('동일한 특징은 다른 색 특징보다 높은 유사도를 낸다', () => {

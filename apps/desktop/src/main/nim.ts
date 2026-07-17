@@ -49,6 +49,7 @@ export async function analyzeWithNim(args: {
   apiKey: string;
   model: string;
   imageDataUrl: string;
+  slotImageDataUrls?: string[];
   allowedSpecies: VisionSpeciesCandidate[];
   localVisionSlots?: LocalVisionSlot[];
   timeoutMs?: number;
@@ -58,9 +59,13 @@ export async function analyzeWithNim(args: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const allowed = args.allowedSpecies.map((entry) => `${entry.displayName} (${entry.name})`).join(', ');
   const localCandidates = args.localVisionSlots?.map((slot) => {
-    const candidates = slot.candidates.map((candidate) => `${candidate.species}[${candidate.types.join('/') || '타입 미확인'}] ${Math.round(candidate.confidence * 100)}% ${candidate.source === 'learned' ? 'Champions 학습 이미지' : '초기 아이콘'}`);
+    const candidates = slot.candidates.map((candidate) => `${candidate.species}[${candidate.types.join('/') || '타입 미확인'}] ${Math.round(candidate.confidence * 100)}% ${candidate.source === 'learned' ? 'Champions 학습 이미지' : '공식 다중 렌더 참조'}`);
     return `슬롯 ${slot.slot}: ${candidates.join(', ') || '로컬 후보 없음'}`;
   }).join('\n') ?? '로컬 참조 이미지가 아직 없습니다.';
+  const slotImageDataUrls = (args.slotImageDataUrls ?? []).filter((url) => /^data:image\/png;base64,/i.test(url)).slice(0, 6);
+  const slotImageGuide = slotImageDataUrls.length === 6
+    ? '첨부 이미지는 상대 슬롯 1번부터 6번까지 위에서 아래 순서로 잘라낸 포켓몬 렌더 여섯 장입니다. 이미지 N은 반드시 opponentPreviewSlots의 slot N에 대응합니다.'
+    : '첨부 이미지는 전체 배틀 화면입니다. 오른쪽 상대 패널의 슬롯을 직접 찾으세요.';
   const prompt = `당신은 한국어 Pokémon Champions 배틀 화면 판독기입니다. 전략이나 행동을 추천하지 말고 화면에서 확인되는 사실만 JSON으로 반환하세요.
 
 현재 규정 포켓몬/폼 후보: ${allowed}
@@ -68,9 +73,11 @@ export async function analyzeWithNim(args: {
 로컬 이미지 대조 Top 3 후보:
 ${localCandidates}
 
+${slotImageGuide}
+
 팀 미리보기 화면은 보통 왼쪽 파란/보라 패널이 사용자 팀, 오른쪽 빨간 패널이 상대 팀입니다. 반드시 오른쪽 상대 패널의 세로 6칸만 opponentPreviewSlots 1~6번에 위에서 아래 순서로 대응시키고 왼쪽 사용자 팀을 섞지 마세요. 싱글은 출전 3마리, 더블은 4마리를 고르지만 미리보기 명단은 양쪽 모두 6마리입니다. 유튜브 자막·타이머·트레이너 이름·선택 번호 오버레이는 포켓몬 정보가 아니므로 무시하세요.
 포켓몬 이름 없이 초상화나 아이콘만 보여도 색, 실루엣, 얼굴, 귀·날개·뿔·몸 형태, 타입 아이콘과 지역/성별 폼 차이를 현재 규정 후보와 비교하세요.
-- 로컬 후보는 보조 증거입니다. 'Champions 학습 이미지' 후보를 초기 아이콘보다 우선하되, 화면의 포켓몬 외형·타입 아이콘·성별 기호와 충돌하면 버리세요.
+- 로컬 후보는 보조 증거입니다. 'Champions 학습 이미지' 후보를 공식 다중 렌더 참조보다 우선하되, 화면의 포켓몬 외형·타입 아이콘·성별 기호와 충돌하면 버리세요.
 - 로컬 후보에 정답이 없다고 판단되면 전체 현재 규정 후보에서 직접 찾으세요.
 - 한 종을 충분히 식별했으면 species에 영문 후보명을 넣으세요.
 - 애매하면 species는 null로 두고 candidates에 가능성이 높은 후보를 최대 3개 넣으세요.
@@ -100,12 +107,16 @@ ${localCandidates}
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: args.imageDataUrl } },
+            ...(slotImageDataUrls.length === 6 ? slotImageDataUrls : [args.imageDataUrl])
+              .map((url) => ({ type: 'image_url', image_url: { url } })),
           ],
         }],
         temperature: 0.1,
         top_p: 0.2,
-        max_tokens: 1800,
+        max_tokens: slotImageDataUrls.length === 6 ? 900 : 1800,
+        ...(args.model === 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
+          ? { reasoning_budget: 256 }
+          : {}),
         stream: false,
       }),
     });

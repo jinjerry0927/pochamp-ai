@@ -1,6 +1,6 @@
 {
   "name": "pochamp-ai",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "description": "Pokémon Champions 싱글 친선전용 로컬 의사결정 도우미",
   "repository": {

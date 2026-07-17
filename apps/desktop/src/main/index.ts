@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { AppStore } from './store.js';
 import { analyzeWithNim } from './nim.js';
 import { VisionReferenceStore } from './vision-references.js';
-import { mergeLocalCandidates } from './vision-merge.js';
+import { mergeLocalCandidates, visionFromConfirmedLocalSlots } from './vision-merge.js';
 import type { CaptureAnalysis, CropRect, HistoryEntry } from '../shared/contracts.js';
 import { UpdateManager } from './updater.js';
 
@@ -177,6 +177,16 @@ function registerIpc(): void {
     const capture = await captureSelectedSource();
     if (capture.duplicate) return { duplicate: true, latencyMs: Math.round(performance.now() - started), warning: '직전 프레임과 같아 API 호출을 생략했습니다.' };
     const localVisionSlots = await visionReferences.matchPreview(nativeImage.createFromDataURL(capture.dataUrl!));
+    const confirmedLocalVision = visionFromConfirmedLocalSlots(localVisionSlots);
+    if (confirmedLocalVision) {
+      return {
+        duplicate: false,
+        screenshot: capture.dataUrl,
+        vision: confirmedLocalVision,
+        localVisionSlots,
+        latencyMs: Math.round(performance.now() - started),
+      };
+    }
     const apiKey = await store.getApiKey();
     if (!apiKey) return { duplicate: false, screenshot: capture.dataUrl, localVisionSlots, latencyMs: Math.round(performance.now() - started), warning: 'NVIDIA API 키가 없어 로컬 이미지 후보만 표시합니다.' };
     try {
@@ -184,6 +194,7 @@ function registerIpc(): void {
         apiKey,
         model: settings.model,
         imageDataUrl: capture.dataUrl!,
+        slotImageDataUrls: localVisionSlots.map((slot) => slot.imageDataUrl),
         allowedSpecies: regulationSpecies().map((entry) => ({ name: entry.name, displayName: entry.displayName })),
         localVisionSlots,
       }), localVisionSlots);
